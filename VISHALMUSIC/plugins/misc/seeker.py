@@ -2,6 +2,8 @@ import asyncio
 
 from VISHALMUSIC.misc import db
 from VISHALMUSIC.utils.database import get_active_chats, is_music_playing
+from VISHALMUSIC.core.call import VISHAL
+from VISHALMUSIC import app
 
 
 async def timer():
@@ -17,6 +19,11 @@ async def timer():
             if duration == 0:
                 continue
             if db[chat_id][0]["played"] >= duration:
+                # Song has finished, trigger next song playback
+                try:
+                    await VISHAL.play(app, chat_id)
+                except:
+                    pass
                 continue
             db[chat_id][0]["played"] += 1
 
