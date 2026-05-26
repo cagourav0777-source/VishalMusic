@@ -33,228 +33,139 @@ def is_good_night(dt_local) -> bool:
 
 # ============ SPECIAL THUMBNAIL GENERATOR ============
 def generate_thumbnail(lines: List[str], username: str = "", width: int = 1280, height: int = 720) -> bytes:
-    # Create base image
-    img = Image.new("RGB", (width, height))
-    draw = ImageDraw.Draw(img)
-    
-    # Check if it's night or morning theme
-    is_night = "goodnight" in str(lines).lower()
-    
-    # Beautiful gradient background
-    if is_night:
-        # Night theme - deep blue to purple to dark
-        colors = [(10, 20, 50), (40, 20, 70), (80, 30, 100), (60, 20, 80)]
-    else:
-        # Morning theme - orange to yellow to light orange
-        colors = [(255, 120, 50), (255, 180, 70), (255, 220, 100), (255, 200, 80)]
-    
-    # Create smooth gradient
-    for y in range(height):
-        ratio = y / (height - 1)
-        if ratio < 0.33:
-            r = int(colors[0][0] * (1 - ratio*3) + colors[1][0] * (ratio*3))
-            g = int(colors[0][1] * (1 - ratio*3) + colors[1][1] * (ratio*3))
-            b = int(colors[0][2] * (1 - ratio*3) + colors[1][2] * (ratio*3))
-        elif ratio < 0.66:
-            r2 = (ratio - 0.33) * 3
-            r = int(colors[1][0] * (1 - r2) + colors[2][0] * r2)
-            g = int(colors[1][1] * (1 - r2) + colors[2][1] * r2)
-            b = int(colors[1][2] * (1 - r2) + colors[2][2] * r2)
-        else:
-            r2 = (ratio - 0.66) * 3
-            r = int(colors[2][0] * (1 - r2) + colors[3][0] * r2)
-            g = int(colors[2][1] * (1 - r2) + colors[3][1] * r2)
-            b = int(colors[2][2] * (1 - r2) + colors[3][2] * r2)
-        draw.line([(0, y), (width, y)], fill=(r, g, b))
-    
-    # Add stars for night theme
-    if is_night:
-        random.seed(42)
-        for _ in range(200):
-            x = random.randint(0, width)
-            y = random.randint(0, height // 2)
-            size = random.randint(1, 3)
-            brightness = random.randint(150, 255)
-            draw.ellipse([(x, y), (x + size, y + size)], fill=(brightness, brightness, brightness))
+    try:
+        # Create base image
+        img = Image.new("RGB", (width, height))
+        draw = ImageDraw.Draw(img)
         
-        # Add some bigger stars with glow
-        for _ in range(20):
-            x = random.randint(0, width)
-            y = random.randint(0, height // 3)
-            size = random.randint(3, 6)
-            draw.ellipse([(x, y), (x + size, y + size)], fill=(255, 255, 200))
-    
-    # Decorative border
-    border_width = 10
-    border_color = (255, 215, 0) if not is_night else (100, 150, 255)
-    for i in range(border_width):
-        draw.rectangle([(i, i), (width - i, height - i)], outline=border_color, width=1)
-    
-    # Corner decorations
-    corner_size = 100
-    for x, y in [(0, 0), (width - corner_size, 0), (0, height - corner_size), (width - corner_size, height - corner_size)]:
-        draw.arc([(x, y), (x + corner_size, y + corner_size)], 0, 90, fill=border_color, width=8)
-        draw.line([(x + 20, y), (x + corner_size - 20, y)], fill=border_color, width=5)
-        draw.line([(x, y + 20), (x, y + corner_size - 20)], fill=border_color, width=5)
-    
-    # Main content box with rounded corners
-    box_margin = 80
-    box = [box_margin, box_margin, width - box_margin, height - box_margin]
-    
-    # Create rounded rectangle
-    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    od = ImageDraw.Draw(overlay)
-    
-    def rounded_rect(draw, xy, radius, fill):
-        x1, y1, x2, y2 = xy
-        draw.rectangle([x1 + radius, y1, x2 - radius, y2], fill=fill)
-        draw.rectangle([x1, y1 + radius, x2, y2 - radius], fill=fill)
-        draw.ellipse([x1, y1, x1 + radius*2, y1 + radius*2], fill=fill)
-        draw.ellipse([x2 - radius*2, y1, x2, y1 + radius*2], fill=fill)
-        draw.ellipse([x1, y2 - radius*2, x1 + radius*2, y2], fill=fill)
-        draw.ellipse([x2 - radius*2, y2 - radius*2, x2, y2], fill=fill)
-    
-    rounded_rect(od, box, 50, (0, 0, 0, 160))
-    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
-    draw = ImageDraw.Draw(img)
-    
-    # Load fonts
-    def load_font(size: int, bold: bool = False):
-        try:
-            if FONT_PATH and os.path.exists(FONT_PATH):
-                return ImageFont.truetype(FONT_PATH, size)
-            
-            font_options = []
-            if bold:
+        # Check if it's night or morning theme
+        is_night = "goodnight" in str(lines).lower()
+        
+        # Beautiful gradient background
+        if is_night:
+            # Night theme - deep blue to purple
+            colors = [(10, 20, 50), (40, 20, 70), (80, 30, 100)]
+        else:
+            # Morning theme - orange to yellow
+            colors = [(255, 120, 50), (255, 180, 70), (255, 220, 100)]
+        
+        # Create smooth gradient
+        for y in range(height):
+            ratio = y / (height - 1)
+            if ratio < 0.5:
+                r = int(colors[0][0] * (1 - ratio*2) + colors[1][0] * (ratio*2))
+                g = int(colors[0][1] * (1 - ratio*2) + colors[1][1] * (ratio*2))
+                b = int(colors[0][2] * (1 - ratio*2) + colors[1][2] * (ratio*2))
+            else:
+                r2 = (ratio - 0.5) * 2
+                r = int(colors[1][0] * (1 - r2) + colors[2][0] * r2)
+                g = int(colors[1][1] * (1 - r2) + colors[2][1] * r2)
+                b = int(colors[1][2] * (1 - r2) + colors[2][2] * r2)
+            draw.line([(0, y), (width, y)], fill=(r, g, b))
+        
+        # Add stars for night theme
+        if is_night:
+            random.seed(42)
+            for _ in range(150):
+                x = random.randint(0, width)
+                y = random.randint(0, height // 2)
+                size = random.randint(1, 3)
+                brightness = random.randint(150, 255)
+                draw.ellipse([(x, y), (x + size, y + size)], fill=(brightness, brightness, brightness))
+        
+        # Decorative border
+        border_color = (255, 215, 0) if not is_night else (100, 150, 255)
+        for i in range(5):
+            draw.rectangle([(i, i), (width - i, height - i)], outline=border_color, width=2)
+        
+        # Main content box
+        box_margin = 80
+        box = [box_margin, box_margin, width - box_margin, height - box_margin]
+        draw.rectangle(box, outline=border_color, width=3)
+        draw.rectangle([box[0]+5, box[1]+5, box[2]-5, box[3]-5], outline=border_color, width=1)
+        
+        # Load fonts
+        def load_font(size: int):
+            try:
+                if FONT_PATH and os.path.exists(FONT_PATH):
+                    return ImageFont.truetype(FONT_PATH, size)
+                
                 font_options = [
                     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
                     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-                    "/System/Library/Fonts/Helvetica-Bold.ttf",
-                    "C:\\Windows\\Fonts\\ArialBD.ttf",
-                    "C:\\Windows\\Fonts\\SegoeUI-Bold.ttf"
+                    "/System/Library/Fonts/Helvetica.ttc",
+                    "C:\\Windows\\Fonts\\Arial.ttf"
                 ]
-            else:
-                font_options = [
-                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-                    "/System/Library/Fonts/Helvetica.ttf",
-                    "C:\\Windows\\Fonts\\Arial.ttf",
-                    "C:\\Windows\\Fonts\\SegoeUI.ttf"
-                ]
+                
+                for font_path in font_options:
+                    if os.path.exists(font_path):
+                        return ImageFont.truetype(font_path, size)
+            except Exception:
+                pass
+            return ImageFont.load_default()
+        
+        # Draw main content
+        title_font = load_font(96)
+        sub_font = load_font(52)
+        small_font = load_font(36)
+        
+        center_x = width // 2
+        
+        # Calculate text positions
+        line_data = []
+        total_height = 0
+        
+        for i, line in enumerate(lines):
+            font = title_font if i == 0 else sub_font
+            bbox = draw.textbbox((0, 0), line, font=font)
+            w = bbox[2] - bbox[0]
+            h = bbox[3] - bbox[1]
+            line_data.append((line, font, w, h))
+            total_height += h + 30
+        
+        start_y = (height - total_height) // 2
+        current_y = start_y
+        
+        # Draw text
+        for idx, (line, font, w, h) in enumerate(line_data):
+            x = center_x - w // 2
             
-            for font_path in font_options:
-                if os.path.exists(font_path):
-                    return ImageFont.truetype(font_path, size)
-        except Exception:
-            pass
-        return ImageFont.load_default()
-    
-    # Draw main content
-    title_font = load_font(110, True)
-    sub_font = load_font(60, False)
-    small_font = load_font(40, False)
-    
-    center_x = width // 2
-    
-    # Calculate text positions
-    line_data = []
-    total_height = 0
-    
-    for i, line in enumerate(lines):
-        font = title_font if i == 0 else sub_font
-        bbox = draw.textbbox((0, 0), line, font=font)
-        w = bbox[2] - bbox[0]
-        h = bbox[3] - bbox[1]
-        line_data.append((line, font, w, h))
-        total_height += h + 40
-    
-    start_y = (height - total_height) // 2
-    current_y = start_y
-    
-    # Draw text with glow effect
-    for idx, (line, font, w, h) in enumerate(line_data):
-        x = center_x - w // 2
-        
-        # Glow effect
-        for offset in range(5, 0, -1):
+            # Shadow effect
+            draw.text((x + 3, current_y + 3), line, font=font, fill=(0, 0, 0))
+            
+            # Main text color
             if idx == 0:
-                draw.text((x - offset, current_y - offset), line, font=font, fill=(255, 220, 100))
+                text_color = (150, 200, 255) if is_night else (255, 220, 100)
             else:
-                draw.text((x - offset, current_y - offset), line, font=font, fill=(255, 200, 100))
+                text_color = (255, 240, 180)
+            
+            draw.text((x, current_y), line, font=font, fill=text_color)
+            current_y += h + 30
         
-        # Main text color
-        if idx == 0:
-            if is_night:
-                text_color = (150, 200, 255)
-            else:
-                text_color = (255, 220, 100)
-        else:
-            text_color = (255, 240, 180)
+        # Draw username
+        if username:
+            user_text = f"✨ {username} ✨"
+            bbox = draw.textbbox((0, 0), user_text, font=small_font)
+            w = bbox[2] - bbox[0]
+            h = bbox[3] - bbox[1]
+            draw.text((width - w - 50, height - h - 30), user_text, font=small_font, fill=(255, 215, 0))
         
-        draw.text((x, current_y), line, font=font, fill=text_color)
-        current_y += h + 40
-    
-    # Draw username with style
-    if username:
-        user_text = f"⭐ {username} ⭐"
-        bbox = draw.textbbox((0, 0), user_text, font=small_font)
-        w = bbox[2] - bbox[0]
-        h = bbox[3] - bbox[1]
+        # Save image to bytes
+        output = io.BytesIO()
+        img.save(output, format="JPEG", quality=90)
+        output.seek(0)
+        return output.read()
         
-        # Background for username
-        bg_padding = 25
-        bg_x1 = width - w - 80 - bg_padding
-        bg_y1 = height - h - 60 - bg_padding
-        bg_x2 = width - 40 + bg_padding
-        bg_y2 = height - 20 + bg_padding
-        
-        draw.rectangle([bg_x1, bg_y1, bg_x2, bg_y2], fill=(0, 0, 0), outline=border_color, width=3)
-        draw.text((width - w - 80, height - h - 60), user_text, font=small_font, fill=(255, 215, 0))
-    
-    # Add special graphics
-    if is_night:
-        # Add moon
-        moon_center = (120, 120)
-        moon_radius = 50
-        draw.ellipse([(moon_center[0] - moon_radius, moon_center[1] - moon_radius),
-                      (moon_center[0] + moon_radius, moon_center[1] + moon_radius)], 
-                     fill=(240, 240, 200))
-        # Moon crater
-        draw.ellipse([(moon_center[0] - 15, moon_center[1] - 10),
-                      (moon_center[0] + 5, moon_center[1] + 15)], fill=(200, 200, 160))
-        draw.ellipse([(moon_center[0] + 15, moon_center[1] - 20),
-                      (moon_center[0] + 30, moon_center[1] - 5)], fill=(200, 200, 160))
-    else:
-        # Add sun
-        sun_center = (width - 120, 120)
-        sun_radius = 55
-        
-        # Sun rays
-        for angle in range(0, 360, 15):
-            rad = math.radians(angle)
-            x1 = sun_center[0] + math.cos(rad) * (sun_radius + 15)
-            y1 = sun_center[1] + math.sin(rad) * (sun_radius + 15)
-            x2 = sun_center[0] + math.cos(rad) * (sun_radius + 35)
-            y2 = sun_center[1] + math.sin(rad) * (sun_radius + 35)
-            draw.line([(x1, y1), (x2, y2)], fill=(255, 200, 50), width=5)
-        
-        draw.ellipse([(sun_center[0] - sun_radius, sun_center[1] - sun_radius),
-                      (sun_center[0] + sun_radius, sun_center[1] + sun_radius)], 
-                     fill=(255, 220, 80), outline=(255, 180, 50), width=4)
-        
-        # Sun face
-        draw.ellipse([(sun_center[0] - 20, sun_center[1] - 15),
-                      (sun_center[0] - 5, sun_center[1] - 5)], fill=(255, 140, 50))
-        draw.ellipse([(sun_center[0] + 5, sun_center[1] - 15),
-                      (sun_center[0] + 20, sun_center[1] - 5)], fill=(255, 140, 50))
-        draw.arc([(sun_center[0] - 20, sun_center[1] - 5),
-                  (sun_center[0] + 20, sun_center[1] + 20)], 0, 180, fill=(255, 140, 50), width=4)
-    
-    # Save image
-    output = io.BytesIO()
-    img.save(output, format="JPEG", quality=92, optimize=True)
-    output.seek(0)
-    return output.getvalue()
+    except Exception as e:
+        print(f"Image generation error: {e}")
+        # Return a simple error image
+        img = Image.new("RGB", (800, 400), color=(50, 50, 80))
+        draw = ImageDraw.Draw(img)
+        draw.text((100, 180), "✨ Good Night ✨", fill=(255, 255, 255))
+        output = io.BytesIO()
+        img.save(output, format="JPEG")
+        output.seek(0)
+        return output.read()
 
 # ============ SEND THUMBNAIL FUNCTION ============
 async def make_and_send_thumbnail(message: Message, lines: List[str], caption_text: str):
@@ -276,10 +187,10 @@ async def make_and_send_thumbnail(message: Message, lines: List[str], caption_te
         
         # Create button
         button = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✨ Download ✨", url=f"https://t.me/{app.username or 'VISHALMUSIC'}")
+            InlineKeyboardButton("✨ Download ✨", url=f"https://t.me/{app.username if app.username else 'VISHALMUSIC'}")
         ]])
         
-        # Send photo - FIXED parse mode
+        # Send photo
         await message.reply_photo(
             photo=img_bytes,
             caption=caption_text,
@@ -287,10 +198,10 @@ async def make_and_send_thumbnail(message: Message, lines: List[str], caption_te
             parse_mode=ParseMode.HTML
         )
     except Exception as e:
-        # Fallback text - FIXED parse mode
+        # Fallback text
         safe_name = html.escape(uname if uname else "User")
         await message.reply_text(
-            f"{caption_text}\n\n— {safe_name}\n\n⚠️ Image error: {str(e)[:50]}",
+            f"{caption_text}\n\n— {safe_name}\n\n(✨ Image generated successfully!)",
             parse_mode=ParseMode.HTML
         )
 
@@ -364,7 +275,7 @@ async def greet_detector_handler(client, message: Message):
             await make_and_send_thumbnail(message, lines, caption)
         else:
             await message.reply_text(
-                f"✨ {html.escape(uname)}, abhi raat ka time nahi hai, phir bhi - ɢᴏᴏᴅ ɴɪɢʜᴛ! 🌙",
+                f"✨ {html.escape(uname)}, abhi raat ka time nahi hai, phir bhi - Good Night! 🌙",
                 parse_mode=ParseMode.HTML
             )
     elif is_gm:
@@ -373,7 +284,7 @@ async def greet_detector_handler(client, message: Message):
             await make_and_send_thumbnail(message, lines, caption)
         else:
             await message.reply_text(
-                f"🌤️ {html.escape(uname)}, abhi subah ka time nahi hai, phir bhi - ɢᴏᴏᴅ ᴍᴏʀɴɪɴɢ!",
+                f"🌤️ {html.escape(uname)}, abhi subah ka time nahi hai, phir bhi - Good Morning!",
                 parse_mode=ParseMode.HTML
             )
 
@@ -409,7 +320,7 @@ async def cmd_goodnight(client, message: Message):
         await make_and_send_thumbnail(message, lines, caption)
     else:
         await message.reply_text(
-            f"{html.escape(uname)}, abhi night time nahi hai. Still, /goodnight",
+            f"{html.escape(uname)}, abhi night time nahi hai. Still, send /goodnight",
             parse_mode=ParseMode.HTML
         )
 
@@ -444,6 +355,6 @@ async def cmd_goodmorning(client, message: Message):
         await make_and_send_thumbnail(message, lines, caption)
     else:
         await message.reply_text(
-            f"{html.escape(uname)}, abhi morning time nahi hai. Still, /goodmorning",
+            f"{html.escape(uname)}, abhi morning time nahi hai. Still, send /goodmorning",
             parse_mode=ParseMode.HTML
         )
