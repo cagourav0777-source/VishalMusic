@@ -72,111 +72,72 @@ async def get_random_anime_background() -> str:
     timestamp = int(time.time() * 1000)
     bg_cache_path = os.path.join(CACHE_DIR, f"temp_anime_bg_{timestamp}_{random.randint(1, 9999)}.png")
     
-    try:
-        async with aiohttp.ClientSession() as session:
-            # Headers to avoid blocking
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-            }
-            
-            # Multiple pages se images lenge for more variety
-            pages = [
-                "https://wallpapercave.com/anime-girl-laptop-wallpapers",
-                "https://wallpapercave.com/anime-girl-wallpapers",
-                "https://wallpapercave.com/anime-aesthetic-laptop-wallpapers",
-                "https://wallpapercave.com/cute-anime-girl-wallpapers",
-                "https://wallpapercave.com/anime-art-wallpapers"
-            ]
-            
-            all_image_urls = []
-            
-            # Try multiple pages
-            for page_url in random.sample(pages, min(3, len(pages))):
-                try:
-                    async with session.get(page_url, headers=headers, timeout=10) as resp:
-                        if resp.status == 200:
-                            html = await resp.text()
+    async with aiohttp.ClientSession() as session:
+        # Headers to avoid blocking
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+        }
+        
+        # Multiple pages se images lenge for more variety
+        pages = [
+            "https://wallpapercave.com/anime-girl-laptop-wallpapers",
+            "https://wallpapercave.com/anime-girl-wallpapers",
+            "https://wallpapercave.com/anime-aesthetic-laptop-wallpapers",
+            "https://wallpapercave.com/cute-anime-girl-wallpapers",
+            "https://wallpapercave.com/anime-art-wallpapers"
+        ]
+        
+        all_image_urls = []
+        
+        # Try multiple pages
+        for page_url in random.sample(pages, min(3, len(pages))):
+            try:
+                async with session.get(page_url, headers=headers, timeout=10) as resp:
+                    if resp.status == 200:
+                        html = await resp.text()
+                        
+                        # Different patterns to extract images
+                        patterns = [
+                            r'https://wallpapercave\.com/(?:uwp|wp)/[^"\']+\.(?:jpg|png|webp|jpeg)',
+                            r'https://wallpapercave\.com/download/[^"\']+',
+                            r'data-src="([^"]+\.(?:jpg|png|webp))"',
+                            r'<img[^>]+src="([^"]+\.(?:jpg|png|webp))"'
+                        ]
+                        
+                        for pattern in patterns:
+                            urls = re.findall(pattern, html, re.IGNORECASE)
+                            # Convert download links to direct image links
+                            urls = [url.replace('/download/', '/wp/') + '.jpg' if '/download/' in url else url for url in urls]
+                            all_image_urls.extend(urls)
                             
-                            # Different patterns to extract images
-                            patterns = [
-                                r'https://wallpapercave\.com/(?:uwp|wp)/[^"\']+\.(?:jpg|png|webp|jpeg)',
-                                r'https://wallpapercave\.com/download/[^"\']+',
-                                r'data-src="([^"]+\.(?:jpg|png|webp))"',
-                                r'<img[^>]+src="([^"]+\.(?:jpg|png|webp))"'
-                            ]
-                            
-                            for pattern in patterns:
-                                urls = re.findall(pattern, html, re.IGNORECASE)
-                                # Convert download links to direct image links
-                                urls = [url.replace('/download/', '/wp/') + '.jpg' if '/download/' in url else url for url in urls]
-                                all_image_urls.extend(urls)
-                                
-                except Exception as e:
-                    print(f"Error fetching {page_url}: {e}")
-                    continue
-            
-            # Remove duplicates
-            all_image_urls = list(set(all_image_urls))
-            
-            # Filter for good quality images
-            all_image_urls = [url for url in all_image_urls if 'thumb' not in url.lower() and 'thumbnail' not in url.lower()]
-            
-            # Also try direct API or different source if no images found
-            if not all_image_urls:
-                # Alternative: Use picsum or other free image API
-                fallback_urls = [
-                    f"https://picsum.photos/1280/720?random={random.randint(1, 10000)}",
-                    f"https://source.unsplash.com/1280x720/?anime,girl&{random.randint(1, 10000)}",
-                ]
-                all_image_urls = fallback_urls
-            
-            if not all_image_urls:
-                raise Exception("No image URLs found")
-            
-            # Pick a random wallpaper
-            bg_url = random.choice(all_image_urls)
-            
-            print(f"Downloading random background from: {bg_url[:100]}...")
-            
-            # Download the wallpaper
-            async with session.get(bg_url, headers=headers, timeout=15) as img_resp:
-                if img_resp.status == 200:
-                    async with aiofiles.open(bg_cache_path, "wb") as f:
-                        await f.write(await img_resp.read())
-                    return bg_cache_path
-                else:
-                    raise Exception(f"Failed to download: {img_resp.status}")
-                    
-    except Exception as e:
-        print(f"Error downloading anime background: {e}")
-        # Create a vibrant gradient background as fallback
-        return await create_vibrant_gradient_background()
-
-
-async def create_vibrant_gradient_background() -> str:
-    """Create a vibrant gradient background if image download fails"""
-    import time
-    timestamp = int(time.time() * 1000)
-    bg_path = os.path.join(CACHE_DIR, f"gradient_bg_{timestamp}.png")
-    
-    # Create vibrant gradient image
-    img = Image.new('RGB', (1280, 720))
-    draw = ImageDraw.Draw(img)
-    
-    # Random vibrant colors
-    color1 = random.choice(ACCENTS)
-    color2 = random.choice(ACCENTS)
-    
-    for y in range(720):
-        r = int(color1[0] * (1 - y/720) + color2[0] * (y/720))
-        g = int(color1[1] * (1 - y/720) + color2[1] * (y/720))
-        b = int(color1[2] * (1 - y/720) + color2[2] * (y/720))
-        draw.line([(0, y), (1280, y)], fill=(r, g, b))
-    
-    img.save(bg_path)
-    return bg_path
+            except Exception as e:
+                print(f"Error fetching {page_url}: {e}")
+                continue
+        
+        # Remove duplicates
+        all_image_urls = list(set(all_image_urls))
+        
+        # Filter for good quality images
+        all_image_urls = [url for url in all_image_urls if 'thumb' not in url.lower() and 'thumbnail' not in url.lower()]
+        
+        if not all_image_urls:
+            raise Exception("No images found on wallpapercave")
+        
+        # Pick a random wallpaper
+        bg_url = random.choice(all_image_urls)
+        
+        print(f"Downloading random background from: {bg_url[:100]}...")
+        
+        # Download the wallpaper
+        async with session.get(bg_url, headers=headers, timeout=15) as img_resp:
+            if img_resp.status == 200:
+                async with aiofiles.open(bg_cache_path, "wb") as f:
+                    await f.write(await img_resp.read())
+                return bg_cache_path
+            else:
+                raise Exception(f"Failed to download: {img_resp.status}")
 
 
 async def get_thumb(videoid: str) -> str:
@@ -210,58 +171,33 @@ async def get_thumb(videoid: str) -> str:
     except Exception:
         thumb_path = None
 
-    # Get random anime background (HAR BAAR DIFFERENT)
+    # Get random anime background from website only
     background_path = await get_random_anime_background()
     
     # Random accent color
     accent = random.choice(ACCENTS)
     
-    # Create base background
-    if background_path and os.path.exists(background_path):
-        try:
-            # Use anime background
-            base = Image.open(background_path).resize((1280, 720)).convert("RGBA")
-            
-            # Less blur and MORE BRIGHTNESS
-            base = base.filter(ImageFilter.GaussianBlur(radius=3))  # Less blur (was 8)
-            
-            # Light overlay instead of dark (for more brightness)
-            brightness_enhancer = ImageEnhance.Brightness(base)
-            base = brightness_enhancer.enhance(1.3)  # Increase brightness by 30%
-            
-            # Add light overlay instead of dark
-            overlay_light = Image.new("RGBA", base.size, (255, 255, 255, 50))  # Light white overlay
-            base = Image.alpha_composite(base, overlay_light)
-            
-            # Contrast enhancement
-            contrast_enhancer = ImageEnhance.Contrast(base)
-            base = contrast_enhancer.enhance(1.1)
-            
-        except Exception as e:
-            print(f"Error processing background: {e}")
-            # Fallback to gradient
-            base = Image.new("RGBA", (1280, 720), (30, 30, 40, 255))
-            gradient = Image.new("RGBA", base.size, 0)
-            for y in range(720):
-                r, g, b = accent
-                color = (int(r * (y / 720)), int(g * (1 - y / 720)), int(b * (0.5 + y / 1440)), 255)
-                ImageDraw.Draw(gradient).line([(0, y), (1280, y)], fill=color)
-            base = Image.alpha_composite(base, gradient)
-            base = ImageEnhance.Brightness(base.filter(ImageFilter.BoxBlur(10))).enhance(0.9)
-    else:
-        # Fallback to gradient background
-        base = Image.new("RGBA", (1280, 720), (30, 30, 40, 255))
-        gradient = Image.new("RGBA", base.size, 0)
-        for y in range(720):
-            r, g, b = accent
-            color = (int(r * (y / 720)), int(g * (1 - y / 720)), int(b * (0.5 + y / 1440)), 255)
-            ImageDraw.Draw(gradient).line([(0, y), (1280, y)], fill=color)
-        base = Image.alpha_composite(base, gradient)
-        base = ImageEnhance.Brightness(base.filter(ImageFilter.BoxBlur(10))).enhance(0.9)
+    # Use anime background from website
+    base = Image.open(background_path).resize((1280, 720)).convert("RGBA")
+    
+    # More brightness
+    base = base.filter(ImageFilter.GaussianBlur(radius=3))  # Less blur
+    
+    # Increase brightness
+    brightness_enhancer = ImageEnhance.Brightness(base)
+    base = brightness_enhancer.enhance(1.3)  # 30% more bright
+    
+    # Light overlay for better text visibility
+    overlay_light = Image.new("RGBA", base.size, (255, 255, 255, 50))
+    base = Image.alpha_composite(base, overlay_light)
+    
+    # Contrast enhancement
+    contrast_enhancer = ImageEnhance.Contrast(base)
+    base = contrast_enhancer.enhance(1.1)
 
-    # Frosted glass panel (slightly more transparent for brightness)
+    # Frosted glass panel
     panel_area = base.crop((PANEL_X, PANEL_Y, PANEL_X + PANEL_W, PANEL_Y + PANEL_H))
-    overlay = Image.new("RGBA", (PANEL_W, PANEL_H), (255, 255, 255, TRANSPARENCY - 50))  # More transparent
+    overlay = Image.new("RGBA", (PANEL_W, PANEL_H), (255, 255, 255, TRANSPARENCY - 50))
     frosted = Image.alpha_composite(panel_area, overlay)
     mask = Image.new("L", (PANEL_W, PANEL_H), 0)
     ImageDraw.Draw(mask).rounded_rectangle((0, 0, PANEL_W, PANEL_H), 50, fill=255)
@@ -276,7 +212,7 @@ async def get_thumb(videoid: str) -> str:
     except OSError:
         title_font = regular_font = heart_font = ImageFont.load_default()
 
-    # Video thumbnail (if available)
+    # Video thumbnail
     if thumb_path and os.path.exists(thumb_path):
         try:
             thumb = Image.open(thumb_path).resize((THUMB_W, THUMB_H))
@@ -286,19 +222,19 @@ async def get_thumb(videoid: str) -> str:
         except Exception as e:
             print(f"Error pasting thumbnail: {e}")
 
-    # Neon title text with shadow
+    # Title text with shadow
     title_text = trim_to_width(title, title_font, MAX_TITLE_WIDTH)
     shadow_pos = (TITLE_X + 2, TITLE_Y + 2)
     draw.text(shadow_pos, title_text, font=title_font, fill=(0, 0, 0, 100))
     draw.text((TITLE_X, TITLE_Y), title_text, font=title_font, fill=accent)
     draw.text((META_X, META_Y), f"YouTube | {views}", fill=(50, 50, 50), font=regular_font)
 
-    # Stylish progress bar
+    # Progress bar
     bar_y = BAR_Y
     draw.line([(BAR_X, bar_y), (BAR_X + BAR_TOTAL_LEN, bar_y)], fill=(100, 100, 100), width=8)
     draw.line([(BAR_X, bar_y), (BAR_X + BAR_RED_LEN, bar_y)], fill=accent, width=8)
 
-    # Heart symbol above progress
+    # Heart symbol
     heart_symbol = "♡゙"
     heart_x = BAR_X + BAR_RED_LEN - 10
     heart_y = bar_y - 32
