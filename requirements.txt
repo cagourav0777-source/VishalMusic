@@ -7,7 +7,7 @@ bs4
 flask
 gunicorn
 deepai
-edge-tts
+edge-tts 
 ffmpeg-python
 future
 gitpython
