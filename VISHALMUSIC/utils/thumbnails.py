@@ -20,12 +20,15 @@ from config import YOUTUBE_IMG_URL
 from VISHALMUSIC.core.dir import CACHE_DIR
 
 
-# =========================
-# PANEL SETTINGS
-# =========================
+# ============================================
+# SIZE SETTINGS
+# ============================================
+
+WIDTH = 1280
+HEIGHT = 720
 
 PANEL_W, PANEL_H = 763, 545
-PANEL_X = (1280 - PANEL_W) // 2
+PANEL_X = (WIDTH - PANEL_W) // 2
 PANEL_Y = 88
 
 TRANSPARENCY = 170
@@ -52,62 +55,65 @@ ICONS_Y = BAR_Y + 48
 MAX_TITLE_WIDTH = 580
 
 
-# =========================
-# RANDOM ACCENT COLORS
-# =========================
+# ============================================
+# COLORS
+# ============================================
 
 ACCENTS = [
-    (255, 102, 204),
-    (102, 204, 255),
-    (255, 153, 102),
-    (153, 102, 255),
-    (102, 255, 178),
-    (255, 255, 102),
-    (255, 51, 153),
-    (51, 255, 255),
-    (255, 102, 0),
-    (102, 0, 255),
-    (0, 255, 102),
     (255, 0, 102),
+    (255, 51, 153),
+    (255, 102, 204),
     (0, 204, 255),
-    (204, 0, 255),
-    (255, 204, 102),
+    (102, 204, 255),
+    (153, 102, 255),
 ]
 
 
-# =========================
-# TEXT TRIMMER
-# =========================
+# ============================================
+# TEXT LIMIT
+# ============================================
 
-def trim_to_width(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> str:
-    ellipsis = "…"
+def trim_to_width(text, font, max_width):
 
-    if font.getlength(text) <= max_w:
+    ellipsis = "..."
+
+    if font.getlength(text) <= max_width:
         return text
 
-    for i in range(len(text) - 1, 0, -1):
-        if font.getlength(text[:i] + ellipsis) <= max_w:
-            return text[:i] + ellipsis
+    for i in range(len(text), 0, -1):
+
+        t = text[:i] + ellipsis
+
+        if font.getlength(t) <= max_width:
+            return t
 
     return ellipsis
 
 
-# =========================
-# RANDOM ANIME BACKGROUND
-# =========================
+# ============================================
+# RANDOM ANIME WALLPAPER
+# ============================================
 
-async def get_random_anime_bg():
-
-    url = "https://wallpapercave.com/anime-girl-laptop-wallpapers"
+async def get_random_wallpaper():
 
     try:
+
+        url = "https://wallpapercave.com/anime-girl-laptop-wallpapers"
+
         headers = {
             "User-Agent": "Mozilla/5.0"
         }
 
-        response = requests.get(url, headers=headers)
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=10
+        )
 
-        soup = BeautifulSoup(response.text, "html.parser")
+        soup = BeautifulSoup(
+            response.text,
+            "html.parser"
+        )
 
         images = []
 
@@ -115,7 +121,10 @@ async def get_random_anime_bg():
 
             src = img.get("src")
 
-            if src and "wallpapers" in src:
+            if not src:
+                continue
+
+            if "wallpapers" in src:
 
                 if src.startswith("//"):
                     src = "https:" + src
@@ -131,27 +140,56 @@ async def get_random_anime_bg():
         return random.choice(images)
 
     except Exception as e:
-        print(f"Anime BG Error: {e}")
+        print(f"Wallpaper Error: {e}")
         return None
 
 
-# =========================
-# MAIN THUMBNAIL FUNCTION
-# =========================
+# ============================================
+# DOWNLOAD IMAGE
+# ============================================
 
-async def get_thumb(videoid: str) -> str:
+async def download_image(url, save_path):
+
+    try:
+
+        async with aiohttp.ClientSession() as session:
+
+            async with session.get(url) as resp:
+
+                if resp.status == 200:
+
+                    async with aiofiles.open(
+                        save_path,
+                        "wb"
+                    ) as f:
+
+                        await f.write(await resp.read())
+
+                    return True
+
+    except Exception as e:
+        print(e)
+
+    return False
+
+
+# ============================================
+# MAIN FUNCTION
+# ============================================
+
+async def get_thumb(videoid: str):
 
     cache_path = os.path.join(
         CACHE_DIR,
-        f"{videoid}_anime_premium.png"
+        f"{videoid}_anime.png"
     )
 
     if os.path.exists(cache_path):
         return cache_path
 
-    # =========================
-    # GET YOUTUBE DATA
-    # =========================
+    # ============================================
+    # YOUTUBE DATA
+    # ============================================
 
     results = VideosSearch(
         f"https://www.youtube.com/watch?v={videoid}",
@@ -167,7 +205,7 @@ async def get_thumb(videoid: str) -> str:
         title = re.sub(
             r"\W+",
             " ",
-            data.get("title", "Unsupported Title")
+            data.get("title", "Unknown Title")
         ).title()
 
         thumbnail = data.get(
@@ -184,129 +222,121 @@ async def get_thumb(videoid: str) -> str:
 
     except Exception:
 
-        title = "Unsupported Title"
+        title = "Unknown Title"
         thumbnail = YOUTUBE_IMG_URL
-        duration = None
+        duration = "0:00"
         views = "Unknown Views"
+
+    # ============================================
+    # LIVE CHECK
+    # ============================================
 
     is_live = (
         not duration or
-        str(duration).strip().lower() in {
-            "",
+        str(duration).lower() in [
             "live",
-            "live now"
-        }
+            "live now",
+            ""
+        ]
     )
 
-    duration_text = (
-        "Live"
-        if is_live
-        else duration or "Unknown"
-    )
+    end_text = "LIVE" if is_live else duration
 
-    # =========================
-    # DOWNLOAD YOUTUBE THUMB
-    # =========================
+    # ============================================
+    # DOWNLOAD THUMBNAIL
+    # ============================================
 
     thumb_path = os.path.join(
         CACHE_DIR,
-        f"thumb_{videoid}.png"
+        f"{videoid}_thumb.jpg"
     )
 
-    try:
+    await download_image(
+        thumbnail,
+        thumb_path
+    )
 
-        async with aiohttp.ClientSession() as session:
-
-            async with session.get(thumbnail) as resp:
-
-                if resp.status == 200:
-
-                    async with aiofiles.open(
-                        thumb_path,
-                        "wb"
-                    ) as f:
-
-                        await f.write(await resp.read())
-
-    except Exception:
-        return YOUTUBE_IMG_URL
-
-    # =========================
-    # RANDOM ANIME BACKGROUND
-    # =========================
-
-    accent = random.choice(ACCENTS)
+    # ============================================
+    # RANDOM BACKGROUND FROM WEBSITE
+    # ============================================
 
     anime_path = os.path.join(
         CACHE_DIR,
-        f"anime_{videoid}.jpg"
+        f"{videoid}_anime_bg.jpg"
     )
 
-    anime_url = await get_random_anime_bg()
+    anime_url = await get_random_wallpaper()
 
-    try:
+    bg_loaded = False
 
-        if anime_url:
+    if anime_url:
 
-            async with aiohttp.ClientSession() as session:
+        ok = await download_image(
+            anime_url,
+            anime_path
+        )
 
-                async with session.get(anime_url) as resp:
+        if ok:
 
-                    if resp.status == 200:
+            try:
 
-                        async with aiofiles.open(
-                            anime_path,
-                            "wb"
-                        ) as f:
+                bg = Image.open(anime_path).convert("RGBA")
 
-                            await f.write(await resp.read())
+                bg = bg.resize(
+                    (WIDTH, HEIGHT)
+                )
 
-            bg = Image.open(anime_path).resize(
-                (1280, 720)
-            ).convert("RGBA")
+                bg_loaded = True
 
-        else:
+            except:
+                pass
 
-            bg = Image.open(thumb_path).resize(
-                (1280, 720)
-            ).convert("RGBA")
+    # fallback
+    if not bg_loaded:
 
-    except Exception:
-
-        bg = Image.open(thumb_path).resize(
-            (1280, 720)
+        bg = Image.open(
+            thumb_path
         ).convert("RGBA")
 
-    # =========================
-    # PREMIUM EFFECTS
-    # =========================
+        bg = bg.resize(
+            (WIDTH, HEIGHT)
+        )
 
-    overlay = Image.new(
+    # ============================================
+    # PREMIUM EFFECTS
+    # ============================================
+
+    bg = bg.filter(
+        ImageFilter.GaussianBlur(8)
+    )
+
+    dark = Image.new(
         "RGBA",
         bg.size,
         (0, 0, 0, 120)
     )
 
-    bg = Image.alpha_composite(bg, overlay)
-
-    bg = bg.filter(
-        ImageFilter.GaussianBlur(3)
+    bg = Image.alpha_composite(
+        bg,
+        dark
     )
 
-    bg = ImageEnhance.Brightness(bg).enhance(0.8)
+    bg = ImageEnhance.Brightness(
+        bg
+    ).enhance(0.75)
 
-    # =========================
+    accent = random.choice(ACCENTS)
+
+    # ============================================
     # GLASS PANEL
-    # =========================
+    # ============================================
 
-    panel_area = bg.crop(
-        (
-            PANEL_X,
-            PANEL_Y,
-            PANEL_X + PANEL_W,
-            PANEL_Y + PANEL_H
-        )
-    )
+    panel = bg.crop((
+        PANEL_X,
+        PANEL_Y,
+        PANEL_X + PANEL_W,
+        PANEL_Y + PANEL_H
+    ))
 
     overlay = Image.new(
         "RGBA",
@@ -315,7 +345,7 @@ async def get_thumb(videoid: str) -> str:
     )
 
     frosted = Image.alpha_composite(
-        panel_area,
+        panel,
         overlay
     )
 
@@ -337,11 +367,11 @@ async def get_thumb(videoid: str) -> str:
         mask
     )
 
-    # =========================
-    # FONTS
-    # =========================
-
     draw = ImageDraw.Draw(bg)
+
+    # ============================================
+    # FONTS
+    # ============================================
 
     try:
 
@@ -355,62 +385,61 @@ async def get_thumb(videoid: str) -> str:
             20
         )
 
-    except OSError:
+    except:
 
         title_font = ImageFont.load_default()
         regular_font = ImageFont.load_default()
 
-    # =========================
-    # THUMBNAIL IMAGE
-    # =========================
+    # ============================================
+    # THUMBNAIL
+    # ============================================
 
-    yt_thumb = Image.open(thumb_path).resize(
+    thumb = Image.open(
+        thumb_path
+    ).convert("RGBA")
+
+    thumb = thumb.resize(
         (THUMB_W, THUMB_H)
     )
 
-    tmask = Image.new(
+    thumb_mask = Image.new(
         "L",
-        yt_thumb.size,
+        thumb.size,
         0
     )
 
-    ImageDraw.Draw(tmask).rounded_rectangle(
+    ImageDraw.Draw(thumb_mask).rounded_rectangle(
         (0, 0, THUMB_W, THUMB_H),
         25,
         fill=255
     )
 
     bg.paste(
-        yt_thumb,
+        thumb,
         (THUMB_X, THUMB_Y),
-        tmask
+        thumb_mask
     )
 
-    # =========================
+    # ============================================
     # TITLE
-    # =========================
+    # ============================================
 
-    title_text = trim_to_width(
+    title = trim_to_width(
         title,
         title_font,
         MAX_TITLE_WIDTH
     )
 
-    shadow_pos = (
-        TITLE_X + 2,
-        TITLE_Y + 2
-    )
-
     draw.text(
-        shadow_pos,
-        title_text,
+        (TITLE_X + 2, TITLE_Y + 2),
+        title,
         font=title_font,
-        fill=(0, 0, 0, 180)
+        fill=(0, 0, 0)
     )
 
     draw.text(
         (TITLE_X, TITLE_Y),
-        title_text,
+        title,
         font=title_font,
         fill=accent
     )
@@ -418,123 +447,125 @@ async def get_thumb(videoid: str) -> str:
     draw.text(
         (META_X, META_Y),
         f"YouTube | {views}",
-        fill=(40, 40, 40),
-        font=regular_font
+        font=regular_font,
+        fill=(40, 40, 40)
     )
 
-    # =========================
+    # ============================================
     # PROGRESS BAR
-    # =========================
-
-    bar_y = BAR_Y
+    # ============================================
 
     draw.line(
-        [
-            (BAR_X, bar_y),
-            (BAR_X + BAR_TOTAL_LEN, bar_y)
-        ],
+        (
+            BAR_X,
+            BAR_Y,
+            BAR_X + BAR_TOTAL_LEN,
+            BAR_Y
+        ),
         fill="black",
         width=6
     )
 
     draw.line(
-        [
-            (BAR_X, bar_y),
-            (BAR_X + BAR_RED_LEN, bar_y)
-        ],
+        (
+            BAR_X,
+            BAR_Y,
+            BAR_X + BAR_RED_LEN,
+            BAR_Y
+        ),
         fill=accent,
         width=6
     )
 
-    # =========================
-    # HEART ICON
-    # =========================
-
-    heart_symbol = "♡゙"
+    # ============================================
+    # HEART
+    # ============================================
 
     try:
 
         heart_font = ImageFont.truetype(
             "VISHALMUSIC/assets/thumb/font2.ttf",
-            26
+            24
         )
 
     except:
+
         heart_font = ImageFont.load_default()
 
-    heart_x = BAR_X + BAR_RED_LEN - 10
-    heart_y = bar_y - 30
-
     draw.text(
-        (heart_x, heart_y),
-        heart_symbol,
-        fill=accent,
-        font=heart_font
+        (
+            BAR_X + BAR_RED_LEN - 15,
+            BAR_Y - 32
+        ),
+        "♡",
+        font=heart_font,
+        fill=accent
     )
 
-    # =========================
-    # TIME TEXT
-    # =========================
+    # ============================================
+    # TIME
+    # ============================================
 
     draw.text(
-        (BAR_X, bar_y + 15),
+        (BAR_X, BAR_Y + 15),
         "00:00",
-        fill="black",
-        font=regular_font
-    )
-
-    end_text = (
-        "Live"
-        if is_live
-        else duration_text
+        font=regular_font,
+        fill="black"
     )
 
     draw.text(
-        (BAR_X + BAR_TOTAL_LEN - 90, bar_y + 15),
+        (
+            BAR_X + BAR_TOTAL_LEN - 90,
+            BAR_Y + 15
+        ),
         end_text,
-        fill=accent,
-        font=regular_font
+        font=regular_font,
+        fill=accent
     )
 
-    # =========================
-    # ICONS
-    # =========================
+    # ============================================
+    # PLAYER ICONS
+    # ============================================
 
     icons_path = "VISHALMUSIC/assets/thumb/play_icons.png"
 
-    if os.path.isfile(icons_path):
+    if os.path.exists(icons_path):
 
-        ic = Image.open(icons_path).resize(
-            (ICONS_W, ICONS_H)
+        icons = Image.open(
+            icons_path
         ).convert("RGBA")
 
-        ic_gray = ic.convert("L")
+        icons = icons.resize(
+            (ICONS_W, ICONS_H)
+        )
 
-        ic_colored = ImageOps.colorize(
-            ic_gray,
+        gray = icons.convert("L")
+
+        colored = ImageOps.colorize(
+            gray,
             black="black",
             white=f"rgb{accent}"
         ).convert("RGBA")
 
-        ic_colored.putalpha(
-            ic.split()[-1]
+        colored.putalpha(
+            icons.split()[-1]
         )
 
         bg.paste(
-            ic_colored,
+            colored,
             (ICONS_X, ICONS_Y),
-            ic_colored
+            colored
         )
 
-    # =========================
+    # ============================================
     # SAVE
-    # =========================
+    # ============================================
 
     bg.save(cache_path)
 
-    # =========================
+    # ============================================
     # CLEANUP
-    # =========================
+    # ============================================
 
     try:
         os.remove(thumb_path)
