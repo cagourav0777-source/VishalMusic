@@ -101,20 +101,18 @@ def load_font(size):
 
 def create_random_nature_background(width, height):
     themes = [
-        ((135, 206, 235), (255, 183, 77)),   # sky sunrise
-        ((34, 139, 34), (144, 238, 144)),    # forest
-        ((25, 25, 112), (72, 61, 139)),      # night
-        ((70, 130, 180), (176, 224, 230)),   # ocean
-        ((255, 140, 0), (255, 215, 0)),      # sunset
-        ((46, 139, 87), (152, 251, 152))     # green land
+        ((135, 206, 235), (255, 183, 77)),
+        ((34, 139, 34), (144, 238, 144)),
+        ((25, 25, 112), (72, 61, 139)),
+        ((70, 130, 180), (176, 224, 230)),
+        ((255, 140, 0), (255, 215, 0)),
+        ((46, 139, 87), (152, 251, 152))
     ]
 
     top, bottom = random.choice(themes)
-
     img = Image.new("RGB", (width, height))
     draw = ImageDraw.Draw(img)
 
-    # Gradient
     for y in range(height):
         ratio = y / height
         r = int(top[0] * (1 - ratio) + bottom[0] * ratio)
@@ -122,7 +120,6 @@ def create_random_nature_background(width, height):
         b = int(top[2] * (1 - ratio) + bottom[2] * ratio)
         draw.line([(0, y), (width, y)], fill=(r, g, b))
 
-    # Random circles for artistic look
     for _ in range(40):
         x = random.randint(0, width)
         y = random.randint(0, height)
@@ -132,10 +129,7 @@ def create_random_nature_background(width, height):
             random.randint(150, 255),
             random.randint(150, 255)
         )
-        draw.ellipse(
-            (x - radius, y - radius, x + radius, y + radius),
-            fill=color
-        )
+        draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=color)
 
     img = img.filter(ImageFilter.GaussianBlur(18))
     return img
@@ -174,13 +168,10 @@ def generate_thumbnail(lines, username=""):
     for i, line in enumerate(lines):
         w, h = sizes[i]
         x = (width - w) // 2
-        # Shadow
         draw.text((x + 4, y + 4), line, font=fonts[i], fill=(0, 0, 0))
-        # Main
         draw.text((x, y), line, font=fonts[i], fill=(255, 255, 255))
         y += h + 25
 
-    # Username
     if username:
         user_text = f"— {username}"
         bbox = draw.textbbox((0, 0), user_text, font=small_font)
@@ -216,20 +207,28 @@ async def make_and_send_thumbnail(message, lines, caption):
         await message.reply_text(f"⚠️ Error:\n{e}")
 
 # =========================================================
-# MAIN HANDLER - FIXED: Added proper filters and error handling
+# MAIN HANDLER - FIXED: Will NOT block other commands
 # =========================================================
 
-@app.on_message(filters.text & ~filters.command(["goodmorning", "goodnight"]))  # Don't trigger on commands
+@app.on_message(filters.text & ~filters.command(["goodmorning", "goodnight"]))
 async def greet_detector_handler(client, message: Message):
-    # Skip if message is from a channel or has no text
-    if not message.text or message.sender_chat:
+    # IMPORTANT: Skip ALL command messages
+    if message.text and message.text.startswith('/'):
         return
     
-    # Skip if message is a command
-    if message.text.startswith('/'):
+    # Skip if no text
+    if not message.text:
         return
     
-    text = message.text or ""
+    text = message.text
+
+    # Check if it's a greeting
+    is_gn = bool(GOODNIGHT_RE.search(text))
+    is_gm = bool(GOODMORNING_RE.search(text))
+    
+    # If not a greeting, exit immediately (don't block)
+    if not is_gn and not is_gm:
+        return
 
     try:
         msg_dt = message.date
@@ -238,13 +237,6 @@ async def greet_detector_handler(client, message: Message):
         local_dt = msg_dt.astimezone(ZoneInfo(TIMEZONE))
     except Exception:
         local_dt = datetime.datetime.now(ZoneInfo(TIMEZONE))
-
-    is_gn = bool(GOODNIGHT_RE.search(text))
-    is_gm = bool(GOODMORNING_RE.search(text))
-
-    # Skip if no greeting detected
-    if not is_gn and not is_gm:
-        return
 
     uname = "User"
     uid = None
@@ -273,7 +265,7 @@ async def greet_detector_handler(client, message: Message):
             await make_and_send_thumbnail(message, lines, caption)
 
 # =========================================================
-# COMMANDS - These won't block other commands
+# COMMANDS - These will work properly now
 # =========================================================
 
 @app.on_message(filters.command("goodmorning"))
