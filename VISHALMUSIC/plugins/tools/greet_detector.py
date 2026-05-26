@@ -7,8 +7,12 @@ import html
 from zoneinfo import ZoneInfo
 from typing import List
 
-from pyrogram import filters
-from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram import filters, enums
+from pyrogram.types import (
+    Message,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -30,7 +34,7 @@ ALLOW_OUT_OF_TIME_REPLY = bool(
 )
 
 # =========================================================
-# REGEX DETECTORS
+# GREETING DETECTORS
 # =========================================================
 
 GOODNIGHT_RE = re.compile(
@@ -60,9 +64,12 @@ def is_good_night(dt_local: datetime.datetime) -> bool:
 # =========================================================
 
 def load_font(size: int):
+
     try:
+
         if FONT_PATH and os.path.exists(FONT_PATH):
             return ImageFont.truetype(FONT_PATH, size)
+
     except Exception:
         pass
 
@@ -84,10 +91,12 @@ def generate_thumbnail(
     bg_bottom = (80, 10, 50)
 
     img = Image.new("RGBA", (width, height), bg_top)
+
     draw = ImageDraw.Draw(img)
 
-    # Gradient background
+    # Gradient Background
     for y in range(height):
+
         ratio = y / (height - 1)
 
         r = int(bg_top[0] * (1 - ratio) + bg_bottom[0] * ratio)
@@ -96,8 +105,9 @@ def generate_thumbnail(
 
         draw.line([(0, y), (width, y)], fill=(r, g, b))
 
-    # Overlay
+    # Overlay Box
     overlay = Image.new("RGBA", (width, height))
+
     od = ImageDraw.Draw(overlay)
 
     margin = 60
@@ -121,23 +131,29 @@ def generate_thumbnail(
         for i in range(len(lines))
     ]
 
-    # Calculate total text height
+    # Text Sizes
     total_height = 0
+
     line_sizes = []
 
     for i, line in enumerate(lines):
 
-        bbox = draw.textbbox((0, 0), line, font=fonts[i])
+        bbox = draw.textbbox(
+            (0, 0),
+            line,
+            font=fonts[i]
+        )
 
         w = bbox[2] - bbox[0]
         h = bbox[3] - bbox[1]
 
         line_sizes.append((w, h))
+
         total_height += h + 25
 
     start_y = (height - total_height) // 2
 
-    # Draw text
+    # Draw Text
     y = start_y
 
     for i, line in enumerate(lines):
@@ -171,7 +187,11 @@ def generate_thumbnail(
 
         user_text = f"— {username}"
 
-        bbox = draw.textbbox((0, 0), user_text, font=small_font)
+        bbox = draw.textbbox(
+            (0, 0),
+            user_text,
+            font=small_font
+        )
 
         uw = bbox[2] - bbox[0]
         uh = bbox[3] - bbox[1]
@@ -183,7 +203,7 @@ def generate_thumbnail(
             fill=(220, 220, 220)
         )
 
-    # Export image
+    # Save Image
     out = io.BytesIO()
 
     img.convert("RGB").save(
@@ -198,10 +218,13 @@ def generate_thumbnail(
 
 
 # =========================================================
-# CAPTION BUILDER
+# CAPTION + TEXT LINES
 # =========================================================
 
-def build_caption_and_lines(kind: str, display_name_html: str):
+def build_caption_and_lines(
+    kind: str,
+    display_name_html: str
+):
 
     if kind == "goodnight":
 
@@ -220,7 +243,7 @@ def build_caption_and_lines(kind: str, display_name_html: str):
 
         lines = [
             "☀️ ɢᴏᴏᴅ ᴍᴏʀɴɪɴɢ ☀️",
-            "ʜᴀᴠᴇ ᴀ ɴɪᴄᴇ ᴅᴀʏ"
+            "ʜᴀᴠᴇ ᴀ ʙʀɪɢʜᴛ ᴅᴀʏ"
         ]
 
         caption = (
@@ -245,6 +268,7 @@ async def make_and_send_thumbnail(
     try:
 
         uname = "VISHAL"
+
         uid = None
 
         if message.from_user:
@@ -258,15 +282,16 @@ async def make_and_send_thumbnail(
 
         uname = uname.strip()
 
-        # Generate image in thread
+        # Generate Image
         img_bytes = await asyncio.to_thread(
             generate_thumbnail,
             lines,
             uname
         )
 
-        # FIXED PART
+        # Convert Bytes -> File
         photo = io.BytesIO(img_bytes)
+
         photo.name = "greeting.jpg"
 
         # Button
@@ -281,11 +306,11 @@ async def make_and_send_thumbnail(
             ]
         )
 
-        # Send photo
+        # Send Photo
         await message.reply_photo(
             photo=photo,
             caption=caption_text,
-            parse_mode="html",
+            parse_mode=enums.ParseMode.HTML,
             reply_markup=kb,
             disable_notification=True
         )
@@ -298,7 +323,7 @@ async def make_and_send_thumbnail(
 
 
 # =========================================================
-# MAIN HANDLER
+# MAIN MESSAGE HANDLER
 # =========================================================
 
 @app.on_message(filters.text)
@@ -306,12 +331,13 @@ async def greet_detector_handler(client, message: Message):
 
     text = message.text or ""
 
-    # Timezone
+    # Local Time
     try:
 
         msg_dt = message.date
 
         if msg_dt.tzinfo is None:
+
             msg_dt = msg_dt.replace(
                 tzinfo=datetime.timezone.utc
             )
@@ -326,12 +352,14 @@ async def greet_detector_handler(client, message: Message):
             ZoneInfo(TIMEZONE)
         )
 
-    # Detect greetings
+    # Detect
     is_gn = bool(GOODNIGHT_RE.search(text))
+
     is_gm = bool(GOODMORNING_RE.search(text))
 
-    # User info
+    # User
     uname = "VISHAL"
+
     uid = None
 
     if message.from_user:
@@ -345,7 +373,7 @@ async def greet_detector_handler(client, message: Message):
 
     uname = uname.strip()
 
-    # HTML mention
+    # Mention
     if uid:
 
         display_html = (
@@ -405,14 +433,15 @@ async def greet_detector_handler(client, message: Message):
 
 
 # =========================================================
-# COMMANDS
+# COMMAND: /goodmorning
 # =========================================================
 
 @app.on_message(filters.command("goodmorning"))
 async def cmd_goodmorning(client, message: Message):
 
     uid = message.from_user.id
-    uname = message.from_user.first_name
+
+    uname = message.from_user.first_name or "User"
 
     display_html = (
         f"<a href='tg://user?id={uid}'>"
@@ -431,11 +460,16 @@ async def cmd_goodmorning(client, message: Message):
     )
 
 
+# =========================================================
+# COMMAND: /goodnight
+# =========================================================
+
 @app.on_message(filters.command("goodnight"))
 async def cmd_goodnight(client, message: Message):
 
     uid = message.from_user.id
-    uname = message.from_user.first_name
+
+    uname = message.from_user.first_name or "User"
 
     display_html = (
         f"<a href='tg://user?id={uid}'>"
