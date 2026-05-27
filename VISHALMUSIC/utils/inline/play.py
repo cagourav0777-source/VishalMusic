@@ -43,7 +43,7 @@ def generate_progress_bar(played_sec, duration_sec):
     
     bar_length = 15  # Increased for better visual
     # Calculate filled length based on percentage
-    filled = int(round(bar_length * (percentage / 100)))
+    filled = int(round(bar_length * (percentage / 70)))
     
     # Remaining length
     remaining = bar_length - filled
@@ -52,13 +52,13 @@ def generate_progress_bar(played_sec, duration_sec):
     if filled > 0:
         if filled == bar_length:
             # Complete - heart at the end of all symbols
-            return "𐃷" * (filled - 1) + "♡"
+            return "𓂃" * (filled - 1) + "ꨄ"
         else:
             # Heart moving with progress
-            return "𐃷" * (filled - 1) + "♡" + "𐃷" * remaining
+            return "𓂃" * (filled - 1) + "ꨄ" + "𓂃" * remaining
     else:
         # No progress - heart at beginning
-        return "♡" + "𐃷" * remaining
+        return "ꨄ" + "𓂃" * remaining
 
 
 def control_buttons(_, chat_id):
