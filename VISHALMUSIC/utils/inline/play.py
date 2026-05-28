@@ -40,25 +40,29 @@ def generate_progress_bar(played_sec, duration_sec):
         percentage = 0
     else:
         percentage = min((played_sec / duration_sec) * 100, 100)
-    
-    bar_length = 8  # Increased for better visual
-    # Calculate filled length based on percentage
+
+    bar_length = 8
     filled = int(round(bar_length * (percentage / 100)))
-    
-    # Remaining length
     remaining = bar_length - filled
-    
-    # If filled > 0, put heart at the end of filled part, otherwise heart at start
+
     if filled > 0:
         if filled == bar_length:
-            # Complete - heart at the end of all symbols
             return "𓂃" * (filled - 1) + "ꨄ"
         else:
-            # Heart moving with progress
             return "𓂃" * (filled - 1) + "ꨄ" + "𓂃" * remaining
     else:
-        # No progress - heart at beginning
         return "ꨄ" + "𓂃" * remaining
+
+
+def autoplay_button(chat_id: int, status: bool) -> InlineKeyboardButton:
+    if status:
+        label = "🔁 ᴀᴜᴛᴏᴘʟᴀʏ : ᴏɴ ✅"
+    else:
+        label = "🔁 ᴀᴜᴛᴏᴘʟᴀʏ : ᴏғғ ❌"
+    return InlineKeyboardButton(
+        text=label,
+        callback_data=f"AUTOPLAY_TOGGLE {chat_id}",
+    )
 
 
 def control_buttons(_, chat_id):
@@ -71,7 +75,7 @@ def control_buttons(_, chat_id):
     ]]
 
 
-def stream_markup_timer(_, chat_id, played, dur):
+def stream_markup_timer(_, chat_id, played, dur, autoplay_status: bool = False):
     if not should_update_progress(chat_id):
         return None
 
@@ -80,14 +84,19 @@ def stream_markup_timer(_, chat_id, played, dur):
     bar = generate_progress_bar(played_sec, duration_sec)
 
     return (
-        [[InlineKeyboardButton(text=f"{played} {bar} {dur}", callback_data="GetTimer")]] +
-        control_buttons(_, chat_id) +
-        [[InlineKeyboardButton(text=_["CLOSE_BUTTON"], callback_data="close")]]
+        [[InlineKeyboardButton(text=f"{played} {bar} {dur}", callback_data="GetTimer")]]
+        + control_buttons(_, chat_id)
+        + [[autoplay_button(chat_id, autoplay_status)]]
+        + [[InlineKeyboardButton(text=_["CLOSE_BUTTON"], callback_data="close")]]
     )
 
 
-def stream_markup(_, chat_id):
-    return control_buttons(_, chat_id) + [[InlineKeyboardButton(text=_["CLOSE_BUTTON"], callback_data="close")]]
+def stream_markup(_, chat_id, autoplay_status: bool = False):
+    return (
+        control_buttons(_, chat_id)
+        + [[autoplay_button(chat_id, autoplay_status)]]
+        + [[InlineKeyboardButton(text=_["CLOSE_BUTTON"], callback_data="close")]]
+    )
 
 
 def playlist_markup(_, videoid, user_id, ptype, channel, fplay):
@@ -109,8 +118,8 @@ def playlist_markup(_, videoid, user_id, ptype, channel, fplay):
             ),
         ],
     ]
-
     return buttons
+
 
 def livestream_markup(_, videoid, user_id, mode, channel, fplay):
     return [
