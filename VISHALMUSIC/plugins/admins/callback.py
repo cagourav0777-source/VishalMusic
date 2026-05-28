@@ -21,6 +21,10 @@ from VISHALMUSIC import YouTube, app
 from VISHALMUSIC.core.call import VISHAL
 from VISHALMUSIC.misc import SUDOERS, db
 from VISHALMUSIC.utils.database import (
+    autoplay_off,
+    autoplay_on,
+    get_autoplay_status,
+    is_autoplay,
     get_active_chats,
     get_assistant,
     get_lang,
@@ -503,3 +507,43 @@ async def stop_download(_, query: CallbackQuery, _lang):
         return await query.edit_message_text(_lang["tg_7"].format(query.from_user.mention))
     except:
         return await query.answer(_lang["tg_8"], show_alert=True)
+
+  @app.on_callback_query(filters.regex("^AUTOPLAY") & ~BANNED_USERS)
+  @languageCB
+  async def autoplay_toggle_cb(client, callback: CallbackQuery, _):
+      chat_id = int(callback.data.strip().split()[1])
+
+      if not await is_active_chat(chat_id):
+          return await callback.answer("❌ ᴋᴏɪ ᴀᴄᴛɪᴠᴇ ꜱᴛʀᴇᴀᴍ ɴᴀʜɪɴ ʜᴀɪ!", show_alert=True)
+
+      if not await is_nonadmin_chat(callback.message.chat.id) and callback.from_user.id not in SUDOERS:
+          admins = adminlist.get(callback.message.chat.id)
+          if not admins:
+              return await callback.answer(_["admin_13"], show_alert=True)
+          if callback.from_user.id not in admins:
+              return await callback.answer(_["admin_14"], show_alert=True)
+
+      status = await is_autoplay(chat_id)
+
+      if status:
+          await autoplay_off(chat_id)
+          await callback.answer(
+              "🔁 Autoplay ᴏꜰꜰ ᴋᴀʀ ᴅɪʏᴀ! ❌\n\nᴀʙ ꜱᴏɴɢ ᴋʜᴀᴛᴀᴍ ʜᴏɴᴇ ᴘᴀʀ ᴀᴜᴛᴏ ᴘʟᴀʏ ɴᴀʜɪɴ ʜᴏɢᴀ.",
+              show_alert=True,
+          )
+      else:
+          await autoplay_on(chat_id)
+          await callback.answer(
+              "🔁 Autoplay ᴏɴ ᴋᴀʀ ᴅɪʏᴀ! ✅\n\nᴊᴀʙ ꜱᴏɴɢ ᴋʜᴀᴛᴀᴍ ʜᴏɢᴀ ᴛᴏ ꜱɪᴍɪʟᴀʀ ꜱᴏɴɢ ᴀᴜᴛᴏᴍᴀᴛɪᴄ ᴘʟᴀʏ ʜᴏɢᴀ!",
+              show_alert=True,
+          )
+
+      # Refresh the player message markup with updated autoplay button
+      try:
+          buttons = stream_markup(_, chat_id)
+          await callback.message.edit_reply_markup(
+              reply_markup=InlineKeyboardMarkup(buttons)
+          )
+      except Exception:
+          pass
+  
