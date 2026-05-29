@@ -272,10 +272,14 @@ class Call:
                         try:
                             if await is_autoplay_on(chat_id):
                                 from VISHALMUSIC.utils.stream.autoplay import auto_play_next
+                                # FIX 1: Pass vidid of finished song so it gets
+                                # added to RECENT before searching — prevents
+                                # the same song from being picked again.
                                 autoplay_started = await auto_play_next(
                                     chat_id,
                                     popped.get("chat_id", chat_id),
                                     popped.get("title", ""),
+                                    popped.get("vidid", ""),
                                 )
                         except Exception:
                             autoplay_started = False
