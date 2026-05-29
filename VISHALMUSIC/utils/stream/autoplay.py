@@ -18,6 +18,7 @@ autoplay_db = mongodb.autoplay
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 RECENT = {}
+RECENT_TITLES = {}
 AUTO_PLAYING = {}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -179,27 +180,109 @@ def detect_movie(title):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 🔁 REPEAT CHECK
+# 🔤 TITLE NORMALIZER
+# Problem: "Diwaniyat" vs "Diwaniyat - AP Dhillon" vs "Diwaniyat Lyrics"
+# — different formats, same song. Two-step approach:
+# Step 1: Split on " - " / " | " separators to drop artist suffix
+# Step 2: Strip bracket content and noise words
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async def is_repeat(chat_id, vidid):
+def normalize_title(title: str) -> str:
+    if not title:
+        return ""
+    t = title.lower().strip()
+
+    # Step 1: Drop artist/channel suffix after separator
+    for sep in [" - ", " | ", " — ", " ft ", " feat "]:
+        if sep in t:
+            t = t.split(sep)[0].strip()
+            break
+
+    # Step 2: Remove bracket content — "(Official Video)", "[Lyrics]", etc.
+    t = re.sub(r"[\(\[\{][^\)\]\}]*[\)\]\}]", "", t)
+
+    # Step 3: Remove noise words
+    noise = [
+        "official", "video", "music", "audio", "lyrics", "lyrical",
+        "lyric", "full", "hd", "hq", "4k", "song", "new", "latest",
+        "visualizer", "teaser", "promo",
+    ]
+    for w in noise:
+        t = re.sub(rf"\b{w}\b", "", t)
+
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def _same_song(stored: str, candidate: str) -> bool:
+    """
+    Fuzzy title match — handles cases where one has extra words.
+    e.g. stored="diwaniyat", candidate="diwaniyat ap dhillon shreya ghoshal"
+    Both start with "diwaniyat" so they match.
+    """
+    if not stored or not candidate:
+        return False
+    if len(stored) < 4 or len(candidate) < 4:
+        return False
+    short = stored if len(stored) <= len(candidate) else candidate
+    long  = candidate if len(stored) <= len(candidate) else stored
+    # Match if the longer one starts with the shorter, or shorter is a substring
+    return long.startswith(short) or short in long
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🔁 REPEAT CHECK (vidid + fuzzy title)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async def is_repeat(chat_id, vidid, title: str = "") -> bool:
+    current = time.time()
+
+    # vidid-based check
     if chat_id not in RECENT:
         RECENT[chat_id] = []
-    current = time.time()
     RECENT[chat_id] = [(v, t) for v, t in RECENT[chat_id] if current - t < 7200]
-    return vidid in [v for v, _ in RECENT[chat_id]]
+    if vidid in [v for v, _ in RECENT[chat_id]]:
+        return True
+
+    # title-based fuzzy check — same song from different channels
+    if title:
+        norm = normalize_title(title)
+        if norm and len(norm) >= 4:
+            if chat_id not in RECENT_TITLES:
+                RECENT_TITLES[chat_id] = []
+            RECENT_TITLES[chat_id] = [
+                (n, t) for n, t in RECENT_TITLES[chat_id] if current - t < 7200
+            ]
+            for stored_norm, _ in RECENT_TITLES[chat_id]:
+                if _same_song(stored_norm, norm):
+                    return True
+
+    return False
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ➕ ADD RECENT SONG
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async def add_recent(chat_id, vidid):
+async def add_recent(chat_id, vidid, title: str = "") -> None:
+    if not vidid:
+        return
+    current = time.time()
+
     if chat_id not in RECENT:
         RECENT[chat_id] = []
-    RECENT[chat_id].append((vidid, time.time()))
+    RECENT[chat_id].append((vidid, current))
     if len(RECENT[chat_id]) > 50:
         RECENT[chat_id] = RECENT[chat_id][-50:]
+
+    if title:
+        norm = normalize_title(title)
+        if norm and len(norm) >= 4:
+            if chat_id not in RECENT_TITLES:
+                RECENT_TITLES[chat_id] = []
+            RECENT_TITLES[chat_id].append((norm, current))
+            if len(RECENT_TITLES[chat_id]) > 50:
+                RECENT_TITLES[chat_id] = RECENT_TITLES[chat_id][-50:]
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -294,7 +377,7 @@ def build_smart_queries(title, artist, movie, lang, mood):
 # 🎵 BEST SONG FINDER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async def get_best_song(chat_id, queries, last_title, artist, movie, mood, lang):
+async def get_best_song(chat_id, queries, last_title, last_vidid, artist, movie, mood, lang):
     candidates = []
     original_words = last_title.lower().split()
 
@@ -302,6 +385,10 @@ async def get_best_song(chat_id, queries, last_title, artist, movie, mood, lang)
         try:
             details, vidid = await yt.track(q)
             if not vidid:
+                continue
+
+            # FIX 1: Hard-skip the exact same video that just played
+            if vidid == last_vidid:
                 continue
 
             title = details.get("title", "").lower()
@@ -345,8 +432,12 @@ async def get_best_song(chat_id, queries, last_title, artist, movie, mood, lang)
                 if any(x in title for x in mood_keywords):
                     score += 15
 
-            if not await is_repeat(chat_id, vidid):
-                score += 50
+            # FIX 1: Hard-skip recently played songs (not just penalise)
+            # Also pass title so same song from different channels is caught
+            if await is_repeat(chat_id, vidid, details.get("title", "")):
+                continue
+
+            score += 50  # bonus for not being a repeat (always true now)
 
             candidates.append((score, vidid, details))
 
@@ -397,17 +488,19 @@ def get_indian_emoji():
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🚀 MAIN AUTOPLAY FUNCTION
 #
-# FIX 1: Signature → (chat_id, original_chat_id, last_title)
-#         call.py passes popped song's title so it's never empty
-# FIX 2: mystic bug → send real app.send_message() first,
-#         pass that message object to stream() not the client
-# FIX 3: yt.track() verified to exist in YouTubeAPI — no change needed
+# FIX 1: last_vidid param added — current song added to RECENT before
+#         searching so it can never be picked as the next song.
+#         get_best_song also hard-skips repeats (not just penalises).
+# FIX 2: stop_stream() removed — assistant stays in VC between songs.
+#         Stream ended naturally so bot is already in VC; calling
+#         stop_stream() was the only reason it was leaving and rejoining.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def auto_play_next(
     chat_id: int,
     original_chat_id: int,
     last_title: str = "",
+    last_vidid: str = "",
 ) -> bool:
     """
     Search for next Indian song smartly based on last song's context.
@@ -415,7 +508,6 @@ async def auto_play_next(
     """
     from VISHALMUSIC.utils.database import get_lang
     from VISHALMUSIC.utils.stream.stream import stream
-    from VISHALMUSIC.core.call import VISHAL
     from strings import get_string
 
     # Double-play protection
@@ -429,9 +521,13 @@ async def auto_play_next(
         if not data or not data.get("status"):
             return False
 
+        # FIX 1: Mark last played song as recent BEFORE searching
+        # Pass title too so same song from different channels is blocked
+        if last_vidid:
+            await add_recent(chat_id, last_vidid, last_title)
+
         indian_emoji = get_indian_emoji()
 
-        # FIX 2: Send real message — this becomes 'mystic' for stream()
         try:
             msg = await app.send_message(
                 original_chat_id,
@@ -440,8 +536,6 @@ async def auto_play_next(
         except Exception:
             return False
 
-        # FIX 1: Use last_title passed from call.py (from popped item)
-        # Fallback to queue if still available, else default
         if not last_title:
             queue = db.get(chat_id)
             if queue and len(queue) > 0:
@@ -456,19 +550,26 @@ async def auto_play_next(
 
         queries = build_smart_queries(last_title, artist, movie, lang, mood)
 
+        # FIX 1: Pass last_vidid so same song is hard-skipped during search
         vidid, details = await get_best_song(
-            chat_id, queries, last_title, artist, movie, mood, lang
+            chat_id, queries, last_title, last_vidid, artist, movie, mood, lang
         )
 
         # Fallback chain
         if not vidid and movie:
             details, vidid = await yt.track(f"{movie} all songs")
+            if vidid == last_vidid:
+                vidid = None
 
         if not vidid and artist:
             details, vidid = await yt.track(f"{artist} hits")
+            if vidid == last_vidid:
+                vidid = None
 
         if not vidid and lang:
             details, vidid = await yt.track(f"{lang} trending songs")
+            if vidid == last_vidid:
+                vidid = None
 
         if not vidid:
             details, vidid = await yt.track("latest bollywood hits 2025")
@@ -480,7 +581,8 @@ async def auto_play_next(
                 pass
             return False
 
-        await add_recent(chat_id, vidid)
+        new_title = details.get("title", "") if details else ""
+        await add_recent(chat_id, vidid, new_title)
 
         link = f"https://youtube.com/watch?v={vidid}"
 
@@ -494,17 +596,16 @@ async def auto_play_next(
         language = await get_lang(chat_id)
         _ = get_string(language)
 
-        # Stop current stream cleanly before starting new one
-        try:
-            await VISHAL.stop_stream(chat_id)
-            await asyncio.sleep(1)
-        except Exception:
-            pass
+        # FIX 2: stop_stream() REMOVED — bot stays in VC between songs.
+        # The stream ended naturally (pytgcalls fired the callback), so the
+        # assistant is still physically in the voice chat. Calling stop_stream()
+        # was explicitly doing leave_call() which caused the leave + rejoin.
+        # stream() → join_call() → assistant.play() handles stream switching
+        # without leaving when the assistant is already in the call.
 
-        # FIX 2: Pass msg (real message) as mystic — NOT the client
         await stream(
             _,
-            msg,                                    # ← real message object
+            msg,
             app.id,
             {
                 "link": link,
