@@ -108,14 +108,12 @@ MOVIE_DB = {
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 TRENDING_STYLES = [
-    "latest hindi songs",
-    "trending punjabi songs",
-    "bollywood hits",
-    "new indian music",
-    "viral indian songs",
-    "top 50 india",
-    "indian hip hop",
-    "indie indian",
+    "hindi songs",
+    "punjabi songs",
+    "bollywood songs",
+    "Instagram trending",
+    "Love songs",
+    "sad songs",
 ]
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
