@@ -2,6 +2,7 @@ import asyncio
 import re
 import time
 import aiohttp
+import json
 
 from VISHALMUSIC import app
 from VISHALMUSIC.core.mongo import mongodb
@@ -11,37 +12,77 @@ from VISHALMUSIC.platforms.Youtube import YouTubeAPI
 yt = YouTubeAPI()
 autoplay_db = mongodb.autoplay
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  SYSTEM STORAGE
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 RECENT = {}
 RECENT_TITLES = {}
 AUTO_PLAYING = {}
+LAST_SONG_CONTEXT = {}  # 🔥 Stores last song details for context
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  PURE DYNAMIC EXTRACTORS (No keywords)
+#  CONTEXT SAVER (Save playing song details)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async def save_song_context(chat_id, title, vidid, duration, artist=None, movie=None):
+    """Save current playing song details for next autoplay"""
+    LAST_SONG_CONTEXT[chat_id] = {
+        "title": title,
+        "vidid": vidid,
+        "duration": duration,
+        "artist": artist or extract_artist(title),
+        "movie": movie or extract_movie(title),
+        "timestamp": time.time(),
+        "core_words": extract_core_words(title)
+    }
+    
+    # Also save to database for persistence (optional)
+    try:
+        await mongodb.song_context.update_one(
+            {"chat_id": chat_id},
+            {"$set": LAST_SONG_CONTEXT[chat_id]},
+            upsert=True
+        )
+    except:
+        pass
+
+async def get_song_context(chat_id):
+    """Get saved context for chat"""
+    if chat_id in LAST_SONG_CONTEXT:
+        return LAST_SONG_CONTEXT[chat_id]
+    
+    # Try to load from database
+    try:
+        data = await mongodb.song_context.find_one({"chat_id": chat_id})
+        if data:
+            del data["_id"]
+            LAST_SONG_CONTEXT[chat_id] = data
+            return data
+    except:
+        pass
+    return None
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  DYNAMIC EXTRACTORS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def extract_core_words(title):
-    """Extract unique meaningful words from title - no hardcode"""
+    """Extract unique meaningful words from title"""
     if not title:
         return []
     
     t = title.lower()
-    
-    # Remove common noise patterns
     t = re.sub(r"\([^)]*\)", "", t)
     t = re.sub(r"\[[^\]]*\]", "", t)
-    t = re.sub(r"\{[^}]*\}", "", t)
     
-    # Split by separators
     for sep in [" - ", " | ", " — ", " ft ", " feat "]:
         if sep in t:
             t = t.split(sep)[0]
             break
     
-    # Extract words
     words = re.findall(r"[a-z]+(?:[a-z]+)*", t)
-    
-    # Filter short words and common noise
-    noise = ["the", "and", "for", "with", "official", "video", "lyrics", "hd", "4k", "song", "new", "latest", "full", "audio", "lyrical"]
+    noise = ["the", "and", "for", "with", "official", "video", "lyrics", "hd", "4k", "song", "new", "latest", "full", "audio"]
     
     result = []
     for w in words:
@@ -50,32 +91,47 @@ def extract_core_words(title):
     
     return result
 
-def get_primary_identifier(title, core_words):
-    """Get main identifier (artist/movie guess) from title structure"""
-    if not title or not core_words:
+def extract_artist(title):
+    """Extract artist name from title"""
+    if not title:
         return ""
     
-    # Get text before first separator
-    for sep in [" - ", " | ", " — "]:
-        if sep in title:
-            primary = title.split(sep)[0].strip()
-            if len(primary) > 2 and len(primary) < 40:
-                return primary
+    t = title.strip()
     
-    # Get first 2-3 words as identifier
-    if len(core_words) >= 2:
-        return " ".join(core_words[:2])
-    elif core_words:
-        return core_words[0]
+    for sep in [" - ", " | ", " — ", " ft. ", " feat. ", " (", " ["]:
+        if sep in t:
+            candidate = t.split(sep)[0].strip()
+            candidate = re.sub(r"(official|video|lyrics|hd|4k|new|latest|song)$", "", candidate, flags=re.I)
+            candidate = re.sub(r"\s+", " ", candidate).strip()
+            if len(candidate) > 2 and len(candidate) < 40:
+                return candidate
+    
+    patterns = [
+        r'^(.+?)\s+-\s+.+$',
+        r'^(.+?)\s+\|\s+.+$',
+        r'^(.+?)\s+\(.+\)$',
+    ]
+    for pattern in patterns:
+        match = re.match(pattern, t)
+        if match:
+            artist = match.group(1).strip()
+            if len(artist) > 2 and len(artist) < 40:
+                return artist
+    
+    words = t.split()
+    if len(words) > 2:
+        candidate = " ".join(words[:3])
+        if len(candidate) < 35:
+            return candidate
     
     return ""
 
-def get_secondary_identifier(title, core_words):
-    """Get secondary identifier (movie/album guess)"""
-    if not title or not core_words:
+def extract_movie(title):
+    """Extract movie name from title"""
+    if not title:
         return ""
     
-    # Look for patterns like "from X" or "movie X"
+    t = title.lower()
     patterns = [
         r'from\s+([a-z0-9\s]+?)(?:\s+[a-z]+)?$',
         r'movie\s+([a-z0-9\s]+?)$',
@@ -83,7 +139,6 @@ def get_secondary_identifier(title, core_words):
         r'\((?:from\s+)?([a-z0-9\s]+?)\)'
     ]
     
-    t = title.lower()
     for pattern in patterns:
         match = re.search(pattern, t)
         if match:
@@ -91,17 +146,7 @@ def get_secondary_identifier(title, core_words):
             if len(candidate) > 2 and len(candidate) < 35:
                 return candidate
     
-    # Get last few words if they seem like a movie
-    if len(core_words) > 3:
-        candidate = " ".join(core_words[-2:])
-        if len(candidate) > 3:
-            return candidate
-    
     return ""
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  TITLE NORMALIZER
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def normalize_title(title):
     if not title:
@@ -117,12 +162,23 @@ def normalize_title(title):
 def same_song(a, b):
     if not a or not b:
         return False
-    if a in b or b in a:
+    a = a.lower().strip()
+    b = b.lower().strip()
+    
+    if a == b:
         return True
+    if len(a) > 5 and len(b) > 5:
+        if a in b or b in a:
+            return True
+    
     words_a = set(a.split())
     words_b = set(b.split())
     if words_a and words_b:
-        return len(words_a & words_b) / max(len(words_a), len(words_b)) > 0.6
+        common = len(words_a & words_b)
+        total = max(len(words_a), len(words_b))
+        if common / total > 0.65:
+            return True
+    
     return False
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -131,19 +187,23 @@ def same_song(a, b):
 
 async def is_repeat(chat_id, vidid, title=""):
     now = time.time()
+    MEMORY_TIME = 86400  # 24 hours
+    
     if chat_id not in RECENT:
         RECENT[chat_id] = []
-    RECENT[chat_id] = [(v, t) for v, t in RECENT[chat_id] if now - t < 14400]
+    RECENT[chat_id] = [(v, t) for v, t in RECENT[chat_id] if now - t < MEMORY_TIME]
+    
     if vidid in [v for v, _ in RECENT[chat_id]]:
         return True
+    
     if title:
         norm = normalize_title(title)
-        if norm:
+        if norm and len(norm) >= 4:
             if chat_id not in RECENT_TITLES:
                 RECENT_TITLES[chat_id] = []
-            RECENT_TITLES[chat_id] = [(n, t) for n, t in RECENT_TITLES[chat_id] if now - t < 14400]
-            for sn, _ in RECENT_TITLES[chat_id]:
-                if same_song(sn, norm):
+            RECENT_TITLES[chat_id] = [(n, t) for n, t in RECENT_TITLES[chat_id] if now - t < MEMORY_TIME]
+            for stored_norm, _ in RECENT_TITLES[chat_id]:
+                if same_song(stored_norm, norm):
                     return True
     return False
 
@@ -151,128 +211,135 @@ async def add_recent(chat_id, vidid, title=""):
     if not vidid:
         return
     now = time.time()
+    MEMORY_TIME = 86400
+    
     if chat_id not in RECENT:
         RECENT[chat_id] = []
     RECENT[chat_id].append((vidid, now))
-    if len(RECENT[chat_id]) > 100:
-        RECENT[chat_id] = RECENT[chat_id][-100:]
+    if len(RECENT[chat_id]) > 200:
+        RECENT[chat_id] = RECENT[chat_id][-200:]
+    
     if title:
         norm = normalize_title(title)
-        if norm:
+        if norm and len(norm) >= 4:
             if chat_id not in RECENT_TITLES:
                 RECENT_TITLES[chat_id] = []
             RECENT_TITLES[chat_id].append((norm, now))
-            if len(RECENT_TITLES[chat_id]) > 100:
-                RECENT_TITLES[chat_id] = RECENT_TITLES[chat_id][-100:]
+            if len(RECENT_TITLES[chat_id]) > 200:
+                RECENT_TITLES[chat_id] = RECENT_TITLES[chat_id][-200:]
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  QUERY BUILDER (Pure dynamic)
+#  QUERY BUILDER (BASED ON CONTEXT)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def build_queries(title, primary_id, secondary_id, core_words):
+def build_queries_from_context(context):
+    """Build search queries based on saved context"""
     queries = []
     
-    # Original clean title
+    title = context.get("title", "")
+    artist = context.get("artist", "")
+    movie = context.get("movie", "")
+    core_words = context.get("core_words", [])
+    
+    # Original title (highest priority)
     clean = normalize_title(title)
     if clean and len(clean) > 4:
         queries.append(clean)
     
-    # Primary identifier (artist)
-    if primary_id and len(primary_id) > 2:
-        queries.append(f"{primary_id} songs")
-        queries.append(f"{primary_id} hits")
-        queries.append(f"{primary_id} new")
+    # Same artist
+    if artist and len(artist) > 2:
+        queries.append(f"{artist} songs")
+        queries.append(f"{artist} new song")
+        queries.append(f"{artist} hit")
     
-    # Secondary identifier (movie)
-    if secondary_id and len(secondary_id) > 2:
-        queries.append(f"{secondary_id} songs")
-        queries.append(f"{secondary_id} all")
+    # Same movie
+    if movie and len(movie) > 2:
+        queries.append(f"{movie} songs")
+        queries.append(f"{movie} song")
     
-    # Combined
-    if primary_id and secondary_id:
-        queries.insert(0, f"{primary_id} {secondary_id}")
+    # Artist + Movie combo
+    if artist and movie:
+        queries.insert(0, f"{artist} {movie} song")
     
-    # Core words combination
+    # Core words
     if len(core_words) >= 2:
         queries.append(" ".join(core_words[:3]))
     
-    # Generic fallbacks (least priority)
+    # Generic (low priority)
     queries.append("popular songs")
     queries.append("trending music")
-    queries.append("hits")
     
-    # Remove duplicates and filter
+    # Filter
     seen = set()
     final = []
     for q in queries:
-        if q not in seen and len(q) > 3 and len(q) < 60:
-            seen.add(q)
-            final.append(q)
+        q_lower = q.lower()
+        bad = ["slowed", "reverb", "lofi", "live", "cover", "remix", "english"]
+        if not any(b in q_lower for b in bad):
+            if q not in seen and len(q) > 3 and len(q) < 60:
+                seen.add(q)
+                final.append(q)
     
     return final[:12]
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  SIMILARITY SCORING (No hardcode)
+#  CONTEXT SCORING
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def calculate_similarity(title1, title2):
-    """Calculate how similar two titles are - pure math"""
-    if not title1 or not title2:
-        return 0
+def calculate_context_score(new_title, context):
+    """Score new song based on saved context"""
+    if not context:
+        return 50
     
-    t1 = title1.lower()
-    t2 = title2.lower()
-    
-    # Extract words
-    words1 = set(re.findall(r"[a-z]+(?:[a-z]+)*", t1))
-    words2 = set(re.findall(r"[a-z]+(?:[a-z]+)*", t2))
-    
-    # Remove very short words
-    words1 = {w for w in words1 if len(w) > 2}
-    words2 = {w for w in words2 if len(w) > 2}
-    
-    if not words1 or not words2:
-        return 0
-    
-    # Jaccard similarity
-    intersection = len(words1 & words2)
-    union = len(words1 | words2)
-    
-    return intersection / union if union > 0 else 0
-
-def calculate_context_score(new_title, last_title, primary_id, secondary_id):
-    """Score based on context match - pure dynamic"""
     score = 0
+    new_lower = new_title.lower()
     
-    # Direct title similarity
-    similarity = calculate_similarity(new_title, last_title)
-    score += similarity * 100
+    # Artist match (highest)
+    artist = context.get("artist", "")
+    if artist and artist.lower() in new_lower:
+        score += 100
     
-    # Primary identifier match
-    if primary_id and primary_id.lower() in new_title.lower():
-        score += 60
+    # Movie match
+    movie = context.get("movie", "")
+    if movie and movie.lower() in new_lower:
+        score += 80
     
-    # Secondary identifier match
-    if secondary_id and secondary_id.lower() in new_title.lower():
-        score += 40
+    # Core words match
+    core_words = context.get("core_words", [])
+    for w in core_words:
+        if len(w) > 3 and w in new_lower:
+            score += 15
     
-    # Core word overlap
-    last_words = set(re.findall(r"[a-z]+", last_title.lower()))
-    new_words = set(re.findall(r"[a-z]+", new_title.lower()))
-    
-    meaningful_overlap = 0
-    for w in last_words:
-        if len(w) > 3 and w in new_words:
-            meaningful_overlap += 15
-    score += meaningful_overlap
+    # Title similarity
+    old_title = context.get("title", "")
+    similarity = calculate_similarity(old_title, new_title)
+    score += similarity * 50
     
     return score
 
+def calculate_similarity(t1, t2):
+    if not t1 or not t2:
+        return 0
+    words1 = set(re.findall(r"[a-z]+", t1.lower()))
+    words2 = set(re.findall(r"[a-z]+", t2.lower()))
+    words1 = {w for w in words1 if len(w) > 2}
+    words2 = {w for w in words2 if len(w) > 2}
+    if not words1 or not words2:
+        return 0
+    intersection = len(words1 & words2)
+    union = len(words1 | words2)
+    return intersection / union if union > 0 else 0
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  FIND SONG (Pure logic)
+#  FIND SONG (BASED ON CONTEXT)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async def find_song(chat_id, queries, last_title, last_vidid, primary_id, secondary_id):
+async def find_song_based_on_context(chat_id, context, last_vidid):
+    """Find next song based on saved context"""
+    if not context:
+        return None, None
+    
+    queries = build_queries_from_context(context)
     candidates = []
     
     for q in queries:
@@ -284,7 +351,7 @@ async def find_song(chat_id, queries, last_title, last_vidid, primary_id, second
             title = info.get("title", "").lower()
             duration = info.get("duration_min", "0:00")
             
-            # Duration check: between 1.5 and 8 minutes
+            # Duration check
             try:
                 if ":" in duration:
                     mins = int(duration.split(":")[0])
@@ -295,28 +362,20 @@ async def find_song(chat_id, queries, last_title, last_vidid, primary_id, second
             except:
                 continue
             
-            # Block obvious compilations (pattern based)
+            # No compilations
             t_lower = title.lower()
-            compilation_patterns = [
-                r'top\s+\d+', r'\d+\s+hits', r'\d+\s+songs',
-                r'non[- ]?stop', r'jukebox', r'playlist', r'megamix'
-            ]
-            is_compilation = any(re.search(p, t_lower) for p in compilation_patterns)
-            if is_compilation:
+            comp_patterns = [r'top\s+\d+', r'\d+\s+hits', r'non[- ]?stop', r'jukebox', r'playlist']
+            if any(re.search(p, t_lower) for p in comp_patterns):
                 continue
             
-            # Block if title has 2+ numbers (likely compilation)
-            if len(re.findall(r'\d+', t_lower)) >= 2:
-                continue
-            
-            # Calculate context score
-            score = calculate_context_score(title, last_title, primary_id, secondary_id)
+            # Score based on context
+            score = calculate_context_score(title, context)
             
             # Repeat check
             if await is_repeat(chat_id, vid, title):
                 continue
             
-            if score > 25:
+            if score > 30:
                 candidates.append((score, vid, info))
                 
         except Exception:
@@ -326,6 +385,7 @@ async def find_song(chat_id, queries, last_title, last_vidid, primary_id, second
     if candidates:
         candidates.sort(key=lambda x: x[0], reverse=True)
         return candidates[0][1], candidates[0][2]
+    
     return None, None
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -362,37 +422,48 @@ async def auto_play_next(chat_id, original_chat_id, last_title="", last_vidid=""
         if not data or not data.get("status"):
             return False
         
-        if last_vidid:
+        # 🔥 Add current song to recent BEFORE searching
+        if last_vidid and last_title:
             await add_recent(chat_id, last_vidid, last_title)
+            # 🔥 Save context for next search
+            await save_song_context(chat_id, last_title, last_vidid, "00:00")
         
-        await app.send_message(original_chat_id, "🔄 ᴀᴜᴛᴏᴘʟᴀʏ → ꜰᴇᴛᴄʜɪɴɢ ɴᴇxᴛ...")
+        await app.send_message(original_chat_id, "🔄 ᴀᴜᴛᴏᴘʟᴀʏ → ꜰᴇᴛᴄʜɪɴɢ ɴᴇxᴛ ʙᴀꜱᴇᴅ ᴏɴ ᴄᴜʀʀᴇɴᴛ ꜱᴏɴɢ...")
         
-        if not last_title:
-            queue = db.get(chat_id)
-            last_title = queue[0].get("title", "song") if queue else "song"
+        # Get saved context
+        context = await get_song_context(chat_id)
         
-        # Pure dynamic extraction
-        core_words = extract_core_words(last_title)
-        primary_id = get_primary_identifier(last_title, core_words)
-        secondary_id = get_secondary_identifier(last_title, core_words)
+        # If no context, create from last_title
+        if not context and last_title:
+            context = {
+                "title": last_title,
+                "vidid": last_vidid,
+                "artist": extract_artist(last_title),
+                "movie": extract_movie(last_title),
+                "core_words": extract_core_words(last_title)
+            }
         
-        queries = build_queries(last_title, primary_id, secondary_id, core_words)
-        vid, info = await find_song(chat_id, queries, last_title, last_vidid, primary_id, secondary_id)
+        # Find next song based on context
+        vid, info = await find_song_based_on_context(chat_id, context, last_vidid)
         
         # Fallbacks
-        if not vid and primary_id:
-            info, vid = await yt.track(f"{primary_id} songs")
-        if not vid and secondary_id:
-            info, vid = await yt.track(f"{secondary_id} songs")
+        if not vid and context:
+            artist = context.get("artist", "")
+            if artist:
+                info, vid = await yt.track(f"{artist} songs")
         if not vid:
             info, vid = await yt.track("popular songs")
         if not vid:
-            info, vid = await yt.track("trending")
+            info, vid = await yt.track("trending music")
         
         if not vid:
             return False
         
-        await add_recent(chat_id, vid, info.get("title", ""))
+        new_title = info.get("title", "")
+        await add_recent(chat_id, vid, new_title)
+        
+        # 🔥 Save new song context for next autoplay
+        await save_song_context(chat_id, new_title, vid, info.get("duration_min", "00:00"))
         
         await stream(
             get_string(await get_lang(chat_id)),
@@ -413,7 +484,7 @@ async def auto_play_next(chat_id, original_chat_id, last_title="", last_vidid=""
         )
         return True
         
-    except Exception:
+    except Exception as e:
         return False
     finally:
         AUTO_PLAYING.pop(chat_id, None)
