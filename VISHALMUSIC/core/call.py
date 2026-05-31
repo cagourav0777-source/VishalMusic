@@ -265,6 +265,14 @@ class Call:
                 await set_loop(chat_id, loop)
             await auto_clean(popped)
             if not check:
+                    # _clear_() marks the chat inactive in DB (is_active_chat()=False).
+                    # This is intentional: stream() inside auto_play_next() checks
+                    # is_active_chat() to decide whether to "just queue" or to
+                    # actually download + join_call + play. We NEED it to be False
+                    # here so stream() takes the "start fresh" path and calls
+                    # join_call() → assistant.play() to start the new stream.
+                    # (If is_active_chat() were True, stream() would only add
+                    # the song to queue without playing it — nothing would start.)
                     await _clear_(chat_id)
 
                     autoplay_started = False
@@ -272,15 +280,26 @@ class Call:
                         try:
                             if await is_autoplay_on(chat_id):
                                 from VISHALMUSIC.utils.stream.autoplay import auto_play_next
-                                # FIX 1: Pass vidid of finished song so it gets
-                                # added to RECENT before searching — prevents
-                                # the same song from being picked again.
+                                from VISHALMUSIC.utils.database import is_active_chat as _is_chat_active
+
                                 autoplay_started = await auto_play_next(
                                     chat_id,
                                     popped.get("chat_id", chat_id),
                                     popped.get("title", ""),
                                     popped.get("vidid", ""),
                                 )
+
+                                # Verify the stream actually started.
+                                # auto_play_next() can return True even when stream()
+                                # silently failed — join_call() has @capture_internal_err
+                                # which swallows its internal AssistantErr and returns
+                                # None. stream() then still runs put_queue() and sends
+                                # a "now playing" photo, but nothing is actually playing.
+                                # A successful join_call() always calls add_active_chat(),
+                                # so is_active_chat()=False means the join silently failed.
+                                if autoplay_started and not await _is_chat_active(chat_id):
+                                    autoplay_started = False
+
                         except Exception:
                             autoplay_started = False
 
@@ -522,9 +541,11 @@ class Call:
                         return
 
                 elif isinstance(update, StreamEnded):
-                    if update.stream_type == StreamEnded.Type.AUDIO:
-                        assistant = await group_assistant(self, update.chat_id)
-                        await self.play(assistant, update.chat_id)
+                    # Handle both AUDIO and VIDEO stream endings.
+                    # The original AUDIO-only guard meant video streams never
+                    # triggered queue advance or autoplay.
+                    assistant = await group_assistant(self, update.chat_id)
+                    await self.play(assistant, update.chat_id)
 
             except Exception:
                 import sys, traceback
