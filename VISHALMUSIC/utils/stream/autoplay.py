@@ -19,31 +19,7 @@ autoplay_db = mongodb.autoplay
 
 RECENT = {}
 RECENT_TITLES = {}
-
-# FIX 3: Timestamp-based lock — boolean lock hangs forever after bot crash/restart.
-# Store the timestamp of when lock was acquired; if > 60s old, consider it expired.
-AUTO_PLAYING = {}  # chat_id -> float (timestamp) or 0
-
-_LOCK_TTL = 60  # seconds
-
-
-def _is_locked(chat_id: int) -> bool:
-    ts = AUTO_PLAYING.get(chat_id, 0)
-    if not ts:
-        return False
-    return (time.time() - ts) < _LOCK_TTL
-
-
-def _acquire_lock(chat_id: int) -> bool:
-    if _is_locked(chat_id):
-        return False
-    AUTO_PLAYING[chat_id] = time.time()
-    return True
-
-
-def _release_lock(chat_id: int) -> None:
-    AUTO_PLAYING.pop(chat_id, None)
-
+AUTO_PLAYING = {}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🇮🇳 INDIAN LANGUAGE DATABASE
@@ -140,32 +116,6 @@ TRENDING_STYLES = [
     "sad songs",
 ]
 
-# FIX 1: Diverse fallback pool — random queries prevent same song every time.
-# Old code used a single hardcoded query "latest bollywood hits 2025" which
-# always returned the exact same #1 YouTube result.
-FALLBACK_POOL = [
-    "latest bollywood hits 2025",
-    "top hindi songs 2025",
-    "trending punjabi songs 2025",
-    "popular hindi songs playlist",
-    "new bollywood songs 2025",
-    "best hindi songs 2024",
-    "bollywood romantic hits",
-    "top 10 hindi songs",
-    "latest punjabi hits",
-    "india trending music 2025",
-    "best arijit singh songs",
-    "best jubin nautiyal songs",
-    "hindi love songs playlist",
-    "punjabi new songs 2025",
-    "bollywood party songs",
-    "sad hindi songs collection",
-    "old bollywood hits 90s",
-    "sufi songs hindi",
-    "new hindi songs march 2025",
-    "hindi songs for long drive",
-]
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🌍 DETECT LANGUAGE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -240,13 +190,16 @@ def normalize_title(title: str) -> str:
         return ""
     t = title.lower().strip()
 
+    # Step 1: Drop artist/channel suffix after separator
     for sep in [" - ", " | ", " — ", " ft ", " feat "]:
         if sep in t:
             t = t.split(sep)[0].strip()
             break
 
+    # Step 2: Remove bracket content — "(Official Video)", "[Lyrics]", etc.
     t = re.sub(r"[\(\[\{][^\)\]\}]*[\)\]\}]", "", t)
 
+    # Step 3: Remove noise words
     noise = [
         "official", "video", "music", "audio", "lyrics", "lyrical",
         "lyric", "full", "hd", "hq", "4k", "song", "new", "latest",
@@ -260,12 +213,18 @@ def normalize_title(title: str) -> str:
 
 
 def _same_song(stored: str, candidate: str) -> bool:
+    """
+    Fuzzy title match — handles cases where one has extra words.
+    e.g. stored="diwaniyat", candidate="diwaniyat ap dhillon shreya ghoshal"
+    Both start with "diwaniyat" so they match.
+    """
     if not stored or not candidate:
         return False
     if len(stored) < 4 or len(candidate) < 4:
         return False
     short = stored if len(stored) <= len(candidate) else candidate
     long  = candidate if len(stored) <= len(candidate) else stored
+    # Match if the longer one starts with the shorter, or shorter is a substring
     return long.startswith(short) or short in long
 
 
@@ -276,12 +235,14 @@ def _same_song(stored: str, candidate: str) -> bool:
 async def is_repeat(chat_id, vidid, title: str = "") -> bool:
     current = time.time()
 
+    # vidid-based check
     if chat_id not in RECENT:
         RECENT[chat_id] = []
     RECENT[chat_id] = [(v, t) for v, t in RECENT[chat_id] if current - t < 7200]
     if vidid in [v for v, _ in RECENT[chat_id]]:
         return True
 
+    # title-based fuzzy check — same song from different channels
     if title:
         norm = normalize_title(title)
         if norm and len(norm) >= 4:
@@ -424,6 +385,7 @@ async def get_best_song(chat_id, queries, last_title, last_vidid, artist, movie,
             if not vidid:
                 continue
 
+            # FIX 1: Hard-skip the exact same video that just played
             if vidid == last_vidid:
                 continue
 
@@ -447,9 +409,6 @@ async def get_best_song(chat_id, queries, last_title, last_vidid, artist, movie,
             except Exception:
                 pass
 
-            if await is_repeat(chat_id, vidid, details.get("title", "")):
-                continue
-
             score = 0
 
             match_count = sum(1 for w in original_words[:5] if w in title and len(w) > 3)
@@ -471,12 +430,12 @@ async def get_best_song(chat_id, queries, last_title, last_vidid, artist, movie,
                 if any(x in title for x in mood_keywords):
                     score += 15
 
-            score += 50
+            # FIX 1: Hard-skip recently played songs (not just penalise)
+            # Also pass title so same song from different channels is caught
+            if await is_repeat(chat_id, vidid, details.get("title", "")):
+                continue
 
-            # FIX 2: Add small random jitter so equal-score songs don't always
-            # resolve to the same top result. Without jitter, the same song
-            # always wins ties since list order is deterministic per query.
-            score += random.randint(0, 10)
+            score += 50  # bonus for not being a repeat (always true now)
 
             candidates.append((score, vidid, details))
 
@@ -485,8 +444,6 @@ async def get_best_song(chat_id, queries, last_title, last_vidid, artist, movie,
 
         await asyncio.sleep(0.2)
 
-    # FIX 2: Shuffle before sort so ties are broken randomly, not by query order
-    random.shuffle(candidates)
     candidates.sort(key=lambda x: x[0], reverse=True)
 
     if candidates:
@@ -528,19 +485,13 @@ def get_indian_emoji():
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🚀 MAIN AUTOPLAY FUNCTION
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #
-# FIX 1: Fallback chain now uses is_repeat() — not just vidid == last_vidid.
-#         Old code: only blocked the immediately previous song.
-#         New code: blocks ANY song played in last 2 hours.
-#
-# FIX 2: Random jitter added to scoring + FALLBACK_POOL is shuffled.
-#         Old code: same query = same #1 YouTube result = same song every time.
-#         New code: random pool + jitter ensures variety even in fallbacks.
-#
-# FIX 3: AUTO_PLAYING uses timestamp instead of boolean.
-#         Old code: bot crash/restart left lock = True → autoplay stuck forever.
-#         New code: lock expires after 60s automatically.
+# FIX 1: last_vidid param added — current song added to RECENT before
+#         searching so it can never be picked as the next song.
+#         get_best_song also hard-skips repeats (not just penalises).
+# FIX 2: stop_stream() removed — assistant stays in VC between songs.
+#         Stream ended naturally so bot is already in VC; calling
+#         stop_stream() was the only reason it was leaving and rejoining.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def auto_play_next(
@@ -549,20 +500,27 @@ async def auto_play_next(
     last_title: str = "",
     last_vidid: str = "",
 ) -> bool:
+    """
+    Search for next Indian song smartly based on last song's context.
+    Returns True if successfully started, False otherwise.
+    """
     from VISHALMUSIC.utils.database import get_lang
     from VISHALMUSIC.utils.stream.stream import stream
     from strings import get_string
 
-    # FIX 3: Timestamp-based lock — won't hang after bot restart
-    if not _acquire_lock(chat_id):
+    # Double-play protection
+    if AUTO_PLAYING.get(chat_id):
         return False
+
+    AUTO_PLAYING[chat_id] = True
 
     try:
         data = await autoplay_db.find_one({"chat_id": chat_id})
         if not data or not data.get("status"):
             return False
 
-        # Mark last played song as recent BEFORE searching
+        # FIX 1: Mark last played song as recent BEFORE searching
+        # Pass title too so same song from different channels is blocked
         if last_vidid:
             await add_recent(chat_id, last_vidid, last_title)
 
@@ -590,44 +548,29 @@ async def auto_play_next(
 
         queries = build_smart_queries(last_title, artist, movie, lang, mood)
 
+        # FIX 1: Pass last_vidid so same song is hard-skipped during search
         vidid, details = await get_best_song(
             chat_id, queries, last_title, last_vidid, artist, movie, mood, lang
         )
 
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # FIX 1: Fallback chain — use is_repeat() not just == last_vidid
-        # Old code only blocked the one song that just played.
-        # New code blocks any song heard in the last 2 hours.
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+        # Fallback chain
         if not vidid and movie:
-            d, v = await yt.track(f"{movie} all songs")
-            if v and not await is_repeat(chat_id, v, d.get("title", "") if d else ""):
-                vidid, details = v, d
+            details, vidid = await yt.track(f"{movie} all songs")
+            if vidid == last_vidid:
+                vidid = None
 
         if not vidid and artist:
-            d, v = await yt.track(f"{artist} hits")
-            if v and not await is_repeat(chat_id, v, d.get("title", "") if d else ""):
-                vidid, details = v, d
+            details, vidid = await yt.track(f"{artist} hits")
+            if vidid == last_vidid:
+                vidid = None
 
         if not vidid and lang:
-            d, v = await yt.track(f"{lang} trending songs")
-            if v and not await is_repeat(chat_id, v, d.get("title", "") if d else ""):
-                vidid, details = v, d
+            details, vidid = await yt.track(f"{lang} trending songs")
+            if vidid == last_vidid:
+                vidid = None
 
-        # FIX 2: Randomized final fallback pool — shuffled so we never get
-        # the same #1 YouTube result from a hardcoded query every single time.
         if not vidid:
-            pool = FALLBACK_POOL.copy()
-            random.shuffle(pool)
-            for fallback_q in pool:
-                try:
-                    d, v = await yt.track(fallback_q)
-                    if v and not await is_repeat(chat_id, v, d.get("title", "") if d else ""):
-                        vidid, details = v, d
-                        break
-                except Exception:
-                    continue
+            details, vidid = await yt.track("latest bollywood hits 2025")
 
         if not vidid:
             try:
@@ -650,6 +593,13 @@ async def auto_play_next(
 
         language = await get_lang(chat_id)
         _ = get_string(language)
+
+        # FIX 2: stop_stream() REMOVED — bot stays in VC between songs.
+        # The stream ended naturally (pytgcalls fired the callback), so the
+        # assistant is still physically in the voice chat. Calling stop_stream()
+        # was explicitly doing leave_call() which caused the leave + rejoin.
+        # stream() → join_call() → assistant.play() handles stream switching
+        # without leaving when the assistant is already in the call.
 
         await stream(
             _,
@@ -680,5 +630,4 @@ async def auto_play_next(
         return False
 
     finally:
-        # FIX 3: Always release the lock — even on exception or early return
-        _release_lock(chat_id)
+        AUTO_PLAYING.pop(chat_id, None)
