@@ -19,14 +19,89 @@ autoplay_db = mongodb.autoplay
 RECENT = {}
 RECENT_TITLES = {}
 AUTO_PLAYING = {}
-LAST_SONG_CONTEXT = {}  # 🔥 Stores last song details for context
+LAST_SONG_CONTEXT = {}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  CONTEXT SAVER (Save playing song details)
+#  STRONG NORMALIZATION (Fix for Diwaniyat repeat)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def normalize_title_strong(title):
+    """Super strong normalization - removes everything except core words"""
+    if not title:
+        return ""
+    
+    t = title.lower().strip()
+    
+    # Remove everything after separators
+    for sep in [" - ", " | ", " — ", " ft ", " feat ", " (", " [", " {"]:
+        if sep in t:
+            t = t.split(sep)[0]
+            break
+    
+    # Remove bracketed content
+    t = re.sub(r"[\(\[{][^\)\]\}]*[\)\]}]", "", t)
+    
+    # Remove all special characters
+    t = re.sub(r"[^a-z0-9\s]", "", t)
+    
+    # Remove common noise words
+    noise = [
+        "official", "video", "music", "audio", "lyrics", "lyrical", "lyric",
+        "full", "hd", "hq", "4k", "8k", "song", "new", "latest", "remix",
+        "cover", "reaction", "visualizer", "teaser", "promo", "slowed",
+        "reverb", "lofi", "sped", "up", "version", "original", "mix", "dj"
+    ]
+    
+    for w in noise:
+        t = re.sub(rf"\b{w}\b", "", t)
+    
+    # Remove extra spaces
+    t = re.sub(r"\s+", " ", t).strip()
+    
+    return t
+
+
+def is_same_song_strong(title1, title2):
+    """Strong check if two titles are the same song"""
+    if not title1 or not title2:
+        return False
+    
+    n1 = normalize_title_strong(title1)
+    n2 = normalize_title_strong(title2)
+    
+    if not n1 or not n2:
+        return False
+    
+    # Exact match after normalization
+    if n1 == n2:
+        return True
+    
+    # One contains the other
+    if len(n1) > 3 and len(n2) > 3:
+        if n1 in n2 or n2 in n1:
+            return True
+    
+    # Word overlap (80% or more)
+    words1 = set(n1.split())
+    words2 = set(n2.split())
+    
+    if words1 and words2:
+        common = len(words1 & words2)
+        total = max(len(words1), len(words2))
+        ratio = common / total if total > 0 else 0
+        
+        if ratio >= 0.8:
+            return True
+    
+    return False
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  CONTEXT FUNCTIONS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def save_song_context(chat_id, title, vidid, duration, artist=None, movie=None):
-    """Save current playing song details for next autoplay"""
+    """Save current playing song details"""
     LAST_SONG_CONTEXT[chat_id] = {
         "title": title,
         "vidid": vidid,
@@ -37,7 +112,6 @@ async def save_song_context(chat_id, title, vidid, duration, artist=None, movie=
         "core_words": extract_core_words(title)
     }
     
-    # Also save to database for persistence (optional)
     try:
         await mongodb.song_context.update_one(
             {"chat_id": chat_id},
@@ -52,7 +126,6 @@ async def get_song_context(chat_id):
     if chat_id in LAST_SONG_CONTEXT:
         return LAST_SONG_CONTEXT[chat_id]
     
-    # Try to load from database
     try:
         data = await mongodb.song_context.find_one({"chat_id": chat_id})
         if data:
@@ -62,6 +135,7 @@ async def get_song_context(chat_id):
     except:
         pass
     return None
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  DYNAMIC EXTRACTORS
@@ -148,47 +222,15 @@ def extract_movie(title):
     
     return ""
 
-def normalize_title(title):
-    if not title:
-        return ""
-    t = title.lower().strip()
-    for sep in [" - ", " | ", " ft ", " feat "]:
-        if sep in t:
-            t = t.split(sep)[0]
-    t = re.sub(r"[\(\[{].*?[\)\]}]", "", t)
-    t = re.sub(r"\b(official|video|lyrics|hd|4k|song|audio|full|new|latest)\b", "", t)
-    return re.sub(r"\s+", " ", t).strip()
-
-def same_song(a, b):
-    if not a or not b:
-        return False
-    a = a.lower().strip()
-    b = b.lower().strip()
-    
-    if a == b:
-        return True
-    if len(a) > 5 and len(b) > 5:
-        if a in b or b in a:
-            return True
-    
-    words_a = set(a.split())
-    words_b = set(b.split())
-    if words_a and words_b:
-        common = len(words_a & words_b)
-        total = max(len(words_a), len(words_b))
-        if common / total > 0.65:
-            return True
-    
-    return False
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  REPEAT PROTECTION
+#  REPEAT PROTECTION (48 hours memory)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def is_repeat(chat_id, vidid, title=""):
     now = time.time()
-    MEMORY_TIME = 86400  # 24 hours
+    MEMORY_TIME = 172800  # 48 HOURS
     
+    # VIDID check
     if chat_id not in RECENT:
         RECENT[chat_id] = []
     RECENT[chat_id] = [(v, t) for v, t in RECENT[chat_id] if now - t < MEMORY_TIME]
@@ -196,40 +238,48 @@ async def is_repeat(chat_id, vidid, title=""):
     if vidid in [v for v, _ in RECENT[chat_id]]:
         return True
     
+    # Strong title check
     if title:
-        norm = normalize_title(title)
-        if norm and len(norm) >= 4:
-            if chat_id not in RECENT_TITLES:
-                RECENT_TITLES[chat_id] = []
-            RECENT_TITLES[chat_id] = [(n, t) for n, t in RECENT_TITLES[chat_id] if now - t < MEMORY_TIME]
-            for stored_norm, _ in RECENT_TITLES[chat_id]:
-                if same_song(stored_norm, norm):
-                    return True
+        if chat_id not in RECENT_TITLES:
+            RECENT_TITLES[chat_id] = []
+        
+        RECENT_TITLES[chat_id] = [(n, t) for n, t in RECENT_TITLES[chat_id] if now - t < MEMORY_TIME]
+        
+        norm_title = normalize_title_strong(title)
+        
+        for stored_norm, _ in RECENT_TITLES[chat_id]:
+            if is_same_song_strong(stored_norm, norm_title):
+                return True
+    
     return False
 
 async def add_recent(chat_id, vidid, title=""):
     if not vidid:
         return
-    now = time.time()
-    MEMORY_TIME = 86400
     
+    now = time.time()
+    MEMORY_TIME = 172800  # 48 hours
+    MAX_HISTORY = 300
+    
+    # Add VIDID
     if chat_id not in RECENT:
         RECENT[chat_id] = []
     RECENT[chat_id].append((vidid, now))
-    if len(RECENT[chat_id]) > 200:
-        RECENT[chat_id] = RECENT[chat_id][-200:]
+    if len(RECENT[chat_id]) > MAX_HISTORY:
+        RECENT[chat_id] = RECENT[chat_id][-MAX_HISTORY:]
     
+    # Add strong normalized title
     if title:
-        norm = normalize_title(title)
-        if norm and len(norm) >= 4:
+        norm_title = normalize_title_strong(title)
+        if norm_title and len(norm_title) >= 3:
             if chat_id not in RECENT_TITLES:
                 RECENT_TITLES[chat_id] = []
-            RECENT_TITLES[chat_id].append((norm, now))
-            if len(RECENT_TITLES[chat_id]) > 200:
-                RECENT_TITLES[chat_id] = RECENT_TITLES[chat_id][-200:]
+            RECENT_TITLES[chat_id].append((norm_title, now))
+            if len(RECENT_TITLES[chat_id]) > MAX_HISTORY:
+                RECENT_TITLES[chat_id] = RECENT_TITLES[chat_id][-MAX_HISTORY:]
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  QUERY BUILDER (BASED ON CONTEXT)
+#  QUERY BUILDER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def build_queries_from_context(context):
@@ -242,7 +292,7 @@ def build_queries_from_context(context):
     core_words = context.get("core_words", [])
     
     # Original title (highest priority)
-    clean = normalize_title(title)
+    clean = normalize_title_strong(title)
     if clean and len(clean) > 4:
         queries.append(clean)
     
@@ -250,12 +300,10 @@ def build_queries_from_context(context):
     if artist and len(artist) > 2:
         queries.append(f"{artist} songs")
         queries.append(f"{artist} new song")
-        queries.append(f"{artist} hit")
     
     # Same movie
     if movie and len(movie) > 2:
         queries.append(f"{movie} songs")
-        queries.append(f"{movie} song")
     
     # Artist + Movie combo
     if artist and movie:
@@ -265,7 +313,7 @@ def build_queries_from_context(context):
     if len(core_words) >= 2:
         queries.append(" ".join(core_words[:3]))
     
-    # Generic (low priority)
+    # Generic
     queries.append("popular songs")
     queries.append("trending music")
     
@@ -274,7 +322,7 @@ def build_queries_from_context(context):
     final = []
     for q in queries:
         q_lower = q.lower()
-        bad = ["slowed", "reverb", "lofi", "live", "cover", "remix", "english"]
+        bad = ["slowed", "reverb", "lofi", "live", "cover", "remix", "english", "top", "hits", "jukebox"]
         if not any(b in q_lower for b in bad):
             if q not in seen and len(q) > 3 and len(q) < 60:
                 seen.add(q)
@@ -293,6 +341,7 @@ def calculate_context_score(new_title, context):
     
     score = 0
     new_lower = new_title.lower()
+    new_normalized = normalize_title_strong(new_title)
     
     # Artist match (highest)
     artist = context.get("artist", "")
@@ -312,26 +361,18 @@ def calculate_context_score(new_title, context):
     
     # Title similarity
     old_title = context.get("title", "")
-    similarity = calculate_similarity(old_title, new_title)
-    score += similarity * 50
+    old_normalized = normalize_title_strong(old_title)
+    
+    if old_normalized and new_normalized:
+        if old_normalized == new_normalized:
+            score -= 200  # Same song = big penalty
+        elif old_normalized in new_normalized or new_normalized in old_normalized:
+            score -= 100
     
     return score
 
-def calculate_similarity(t1, t2):
-    if not t1 or not t2:
-        return 0
-    words1 = set(re.findall(r"[a-z]+", t1.lower()))
-    words2 = set(re.findall(r"[a-z]+", t2.lower()))
-    words1 = {w for w in words1 if len(w) > 2}
-    words2 = {w for w in words2 if len(w) > 2}
-    if not words1 or not words2:
-        return 0
-    intersection = len(words1 & words2)
-    union = len(words1 | words2)
-    return intersection / union if union > 0 else 0
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  FIND SONG (BASED ON CONTEXT)
+#  FIND SONG
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def find_song_based_on_context(chat_id, context, last_vidid):
@@ -351,7 +392,7 @@ async def find_song_based_on_context(chat_id, context, last_vidid):
             title = info.get("title", "").lower()
             duration = info.get("duration_min", "0:00")
             
-            # Duration check
+            # Duration check (1.5 to 8 minutes)
             try:
                 if ":" in duration:
                     mins = int(duration.split(":")[0])
@@ -364,7 +405,7 @@ async def find_song_based_on_context(chat_id, context, last_vidid):
             
             # No compilations
             t_lower = title.lower()
-            comp_patterns = [r'top\s+\d+', r'\d+\s+hits', r'non[- ]?stop', r'jukebox', r'playlist']
+            comp_patterns = [r'top\s+\d+', r'\d+\s+hits', r'non[- ]?stop', r'jukebox', r'playlist', r'best of']
             if any(re.search(p, t_lower) for p in comp_patterns):
                 continue
             
@@ -422,18 +463,16 @@ async def auto_play_next(chat_id, original_chat_id, last_title="", last_vidid=""
         if not data or not data.get("status"):
             return False
         
-        # 🔥 Add current song to recent BEFORE searching
+        # Add current song to recent
         if last_vidid and last_title:
             await add_recent(chat_id, last_vidid, last_title)
-            # 🔥 Save context for next search
             await save_song_context(chat_id, last_title, last_vidid, "00:00")
         
-        await app.send_message(original_chat_id, "🔄 ᴀᴜᴛᴏᴘʟᴀʏ → ꜰᴇᴛᴄʜɪɴɢ ɴᴇxᴛ ʙᴀꜱᴇᴅ ᴏɴ ᴄᴜʀʀᴇɴᴛ ꜱᴏɴɢ...")
+        await app.send_message(original_chat_id, "🔄 ᴀᴜᴛᴏᴘʟᴀʏ → ꜰᴇᴛᴄʜɪɴɢ ɴᴇxᴛ...")
         
         # Get saved context
         context = await get_song_context(chat_id)
         
-        # If no context, create from last_title
         if not context and last_title:
             context = {
                 "title": last_title,
@@ -443,7 +482,7 @@ async def auto_play_next(chat_id, original_chat_id, last_title="", last_vidid=""
                 "core_words": extract_core_words(last_title)
             }
         
-        # Find next song based on context
+        # Find next song
         vid, info = await find_song_based_on_context(chat_id, context, last_vidid)
         
         # Fallbacks
@@ -461,8 +500,6 @@ async def auto_play_next(chat_id, original_chat_id, last_title="", last_vidid=""
         
         new_title = info.get("title", "")
         await add_recent(chat_id, vid, new_title)
-        
-        # 🔥 Save new song context for next autoplay
         await save_song_context(chat_id, new_title, vid, info.get("duration_min", "00:00"))
         
         await stream(
@@ -484,7 +521,7 @@ async def auto_play_next(chat_id, original_chat_id, last_title="", last_vidid=""
         )
         return True
         
-    except Exception as e:
+    except Exception:
         return False
     finally:
         AUTO_PLAYING.pop(chat_id, None)
