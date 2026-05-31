@@ -455,6 +455,33 @@ async def add_recent(chat_id, vidid, title: str = "", artist: str = "") -> None:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ⏱ DURATION PARSER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def _parse_duration_mins(duration_str: str) -> int:
+    """
+    Convert YouTube duration string to total minutes.
+
+    BUG FIX: Old code did int(parts[0]) which treated "2:30:00" (2 hr 30 min)
+    as 2 minutes and let it through the 7-minute cap. This caused 2-3 hour
+    songs to play in autoplay.
+
+    Handles:
+      MM:SS      → minutes only        e.g. "4:32"  → 4 min
+      HH:MM:SS   → hours + minutes     e.g. "2:30:00" → 150 min
+    """
+    try:
+        parts = duration_str.strip().split(":")
+        if len(parts) == 3:
+            return int(parts[0]) * 60 + int(parts[1])   # HH:MM:SS
+        elif len(parts) == 2:
+            return int(parts[0])                          # MM:SS
+    except Exception:
+        pass
+    return 0
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  SMART QUERY BUILDER (Indian Focus)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -634,14 +661,10 @@ async def get_best_song(chat_id, queries, last_title, last_vidid, artist, movie,
                     if title_lower.strip() == last_title.lower().strip():
                         continue
 
-                    # 3. Duration 2–7 min
-                    try:
-                        parts = duration_str.split(":")
-                        mins = int(parts[0])
-                        if mins < 2 or mins > 7:
-                            continue
-                    except Exception:
-                        pass
+                    # 3. Duration 2–10 min (HH:MM:SS parsed correctly)
+                    total_mins = _parse_duration_mins(duration_str)
+                    if total_mins < 2 or total_mins > 10:
+                        continue
 
                     # 4. Already played recently
                     if await is_repeat(chat_id, vidid, raw_title):
@@ -878,7 +901,8 @@ async def auto_play_next(
                             continue
                         fb_dur = fb_info.get("duration", "0:00") or "0:00"
                         try:
-                            if int(fb_dur.split(":")[0]) not in range(2, 8):
+                            fb_mins = _parse_duration_mins(fb_dur)
+                            if fb_mins < 2 or fb_mins > 10:
                                 continue
                         except Exception:
                             pass
