@@ -1,3 +1,4 @@
+import asyncio
 import os
 from random import randint
 from typing import Union
@@ -46,15 +47,22 @@ async def stream(
         count = 0
         position = 0
 
-        for search in result:
-            if int(count) == config.PLAYLIST_FETCH_LIMIT:
-                continue
+        # ── LIGHTNING-FAST: fetch all playlist details in parallel ──────────────
+        limited = list(result)[:config.PLAYLIST_FETCH_LIMIT]
+
+        async def _fetch_details(search):
             try:
-                title, duration_min, duration_sec, thumbnail, vidid = await YouTube.details(
-                    search, videoid=search
-                )
+                return await YouTube.details(search, videoid=search)
             except Exception:
+                return None
+
+        details_list = await asyncio.gather(*[_fetch_details(s) for s in limited])
+        # ────────────────────────────────────────────────────────────────────────
+
+        for details in details_list:
+            if details is None:
                 continue
+            title, duration_min, duration_sec, thumbnail, vidid = details
 
             if str(duration_min) == "None":
                 continue
@@ -96,6 +104,8 @@ async def stream(
                     video=is_video,
                     image=thumbnail,
                 )
+                if not await is_active_chat(chat_id):
+                    raise AssistantErr(_["call_6"])
                 await put_queue(
                     chat_id,
                     original_chat_id,
@@ -191,6 +201,11 @@ async def stream(
                 video=is_video,
                 image=thumbnail,
             )
+            # Guard: join_call() has @capture_internal_err — if it fails silently
+            # (returns None) is_active_chat stays False. Don't send "Now Playing"
+            # in that case, or the song appears in VC but nothing is actually playing.
+            if not await is_active_chat(chat_id):
+                raise AssistantErr(_["call_6"])
             await put_queue(
                 chat_id,
                 original_chat_id,
@@ -250,6 +265,8 @@ async def stream(
             if not forceplay:
                 db[chat_id] = []
             await VISHAL.join_call(chat_id, original_chat_id, file_path, video=False)
+            if not await is_active_chat(chat_id):
+                raise AssistantErr(_["call_6"])
             await put_queue(
                 chat_id,
                 original_chat_id,
@@ -306,6 +323,8 @@ async def stream(
             if not forceplay:
                 db[chat_id] = []
             await VISHAL.join_call(chat_id, original_chat_id, file_path, video=is_video)
+            if not await is_active_chat(chat_id):
+                raise AssistantErr(_["call_6"])
             await put_queue(
                 chat_id,
                 original_chat_id,

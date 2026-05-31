@@ -800,6 +800,7 @@ async def auto_play_next(
     original_chat_id: int,
     last_title: str = "",
     last_vidid: str = "",
+    video: bool = False,
 ) -> bool:
     """
     Search for next Indian song smartly based on last song's context.
@@ -982,7 +983,7 @@ async def auto_play_next(
             chat_id,
             "🔁 ᴀᴜᴛᴏᴘʟᴀʏ",
             original_chat_id,
-            video=False,
+            video=video,          # pass through — video mode stays video
             streamtype="youtube",
         )
 
