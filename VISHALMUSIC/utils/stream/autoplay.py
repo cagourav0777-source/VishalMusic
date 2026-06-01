@@ -4,6 +4,10 @@ import re
 import time
 
 import aiohttp
+try:
+    from unidecode import unidecode as _unidecode
+except ImportError:
+    _unidecode = None
 
 from VISHALMUSIC import app
 from VISHALMUSIC.core.mongo import mongodb
@@ -344,7 +348,16 @@ def detect_movie(title):
 def normalize_title(title: str) -> str:
     if not title:
         return ""
-    t = title.lower().strip()
+    t = title.strip()
+
+    # BUG FIX: Transliterate Devanagari (and any other script) to ASCII FIRST
+    # so that "तुम ही हो" and "Tum Hi Ho" both become "tum hi ho" and can be
+    # fuzzy-matched as the same song. Without this, Hindi-script and Roman-script
+    # titles of the same song were never recognised as repeats.
+    if _unidecode:
+        t = _unidecode(t)
+
+    t = t.lower().strip()
 
     # Step 1: Drop artist/channel suffix after separator
     for sep in [" - ", " | ", " — ", " ft ", " feat "]:
@@ -373,6 +386,13 @@ def _same_song(stored: str, candidate: str) -> bool:
     Fuzzy title match — handles cases where one has extra words.
     e.g. stored="diwaniyat", candidate="diwaniyat ap dhillon shreya ghoshal"
     Both start with "diwaniyat" so they match.
+
+    BUG FIX: Old code used `short in long` which caused false positives for
+    common short phrases like "dil", "pyar", "rang" appearing as substrings
+    in completely different songs, blocking valid candidates from autoplay.
+    Now we only match when:
+      - The longer title STARTS WITH the shorter (very high confidence same song)
+      - AND the shorter title is at least 8 chars (prevents 4-7 char noise matches)
     """
     if not stored or not candidate:
         return False
@@ -380,8 +400,8 @@ def _same_song(stored: str, candidate: str) -> bool:
         return False
     short = stored if len(stored) <= len(candidate) else candidate
     long  = candidate if len(stored) <= len(candidate) else stored
-    # Match if the longer one starts with the shorter, or shorter is a substring
-    return long.startswith(short) or short in long
+    # Only match if long starts with short AND short is long enough to be meaningful
+    return len(short) >= 8 and long.startswith(short)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -657,13 +677,19 @@ async def get_best_song(chat_id, queries, last_title, last_vidid, artist, movie,
                     if any(x in title_lower for x in BAD_WORDS):
                         continue
 
-                    # 2. Exact same song title
-                    if title_lower.strip() == last_title.lower().strip():
+                    # 2. Exact same song title — compare AFTER normalizing both
+                    # (includes unidecode so "तुम ही हो" == "Tum Hi Ho" after norm)
+                    if normalize_title(raw_title) == normalize_title(last_title):
                         continue
 
                     # 3. Duration 2–10 min (HH:MM:SS parsed correctly)
+                    # BUG FIX: total_mins == 0 means duration was "0:00" or unknown
+                    # (YouTube API sometimes omits it). Old code filtered these out
+                    # which caused autoplay to find zero songs after 2–3 tracks.
+                    # Allow unknown-duration songs through; only hard-block when
+                    # the duration is known AND out of range.
                     total_mins = _parse_duration_mins(duration_str)
-                    if total_mins < 2 or total_mins > 10:
+                    if total_mins != 0 and (total_mins < 2 or total_mins > 10):
                         continue
 
                     # 4. Already played recently
@@ -903,7 +929,8 @@ async def auto_play_next(
                         fb_dur = fb_info.get("duration", "0:00") or "0:00"
                         try:
                             fb_mins = _parse_duration_mins(fb_dur)
-                            if fb_mins < 2 or fb_mins > 10:
+                            # Same fix as get_best_song: allow unknown duration (0)
+                            if fb_mins != 0 and (fb_mins < 2 or fb_mins > 10):
                                 continue
                         except Exception:
                             pass
